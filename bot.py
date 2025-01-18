@@ -48,14 +48,14 @@ def handle_generate_command(ack, respond, command):
     parts = command_text.split('--n')
     
     prompt = parts[0].strip()
-    num_images = 4  # default to 4 images
+    num_images = 5  # default to 5 images
     
     if len(parts) > 1:
         try:
             requested_num = int(parts[1].strip())
-            num_images = min(max(1, requested_num), 4)  # limit between 1 and 4 images
+            num_images = min(max(1, requested_num), 5)  # limit between 1 and 5 images
         except ValueError:
-            num_images = 4  # keep default of 4 if invalid input
+            num_images = 5  # keep default of 5 if invalid input
     
     # Tell user we're working on it
     respond(f"Working on generating {num_images} images for: '{prompt}'...")
@@ -108,13 +108,13 @@ def handle_generate_command(ack, respond, command):
         logger.error(f"Error in command handler: {str(e)}")
         respond(f"Error: {str(e)}")
 
-def generate_ideogram_image(prompt, num_images=4):
+def generate_ideogram_image(prompt, num_images=5):
     """
     Generate images using Ideogram API
     
     Args:
         prompt (str): The prompt for image generation
-        num_images (int): Number of images to generate (default: 4)
+        num_images (int): Number of images to generate (default: 5)
     
     Returns:
         list: List of image URLs
