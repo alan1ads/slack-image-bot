@@ -49,12 +49,14 @@ def handle_generate_command(ack, respond, command):
         
         # Get the prompt from the command
         prompt = command['text']
+        logger.debug(f"Prompt received: {prompt}")
         
         # Tell user we're working on it
         respond(f"Working on generating images for: '{prompt}'...")
         
         # Generate image with Ideogram
         ideogram_image = generate_ideogram_image(prompt)
+        logger.debug(f"Generated image URL: {ideogram_image}")
         
         if ideogram_image:
             logger.info("Successfully generated image")
