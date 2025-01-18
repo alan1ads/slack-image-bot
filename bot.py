@@ -202,6 +202,8 @@ def generate_ideogram_image(prompt, num_images=5):
                 enhanced_prompt = first_image['magic_prompt']
             elif 'enhanced_prompt' in first_image:
                 enhanced_prompt = first_image['enhanced_prompt']
+            elif 'prompt' in first_image:
+                enhanced_prompt = first_image['prompt']
         
         if not enhanced_prompt:
             logger.info("No magic prompt found in response")
