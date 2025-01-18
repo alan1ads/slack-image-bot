@@ -42,113 +42,54 @@ except Exception as e:
 # Handle the /generate command
 @app.command("/generate")
 def handle_generate_command(ack, respond, command):
-    logger.info(f"Received command: {command}")
-    # Acknowledge command received
-    ack()
-    
-    # Parse command text for prompt and number of images
-    command_text = command['text']
-    parts = command_text.split('--n')
-    
-    prompt = parts[0].strip()
-    num_images = 5  # default to 5 images
-    
-    if len(parts) > 1:
-        try:
-            requested_num = int(parts[1].strip())
-            num_images = min(max(1, requested_num), 5)  # limit between 1 and 5 images
-        except ValueError:
-            num_images = 5  # keep default of 5 if invalid input
-    
-    # Tell user we're working on it
-    respond(f"Working on generating {num_images} images for: '{prompt}'...")
-    
     try:
-        # Generate images with Ideogram
-        result = generate_ideogram_image(prompt, num_images)
+        logger.info(f"Received command: {command}")
+        # Acknowledge command received
+        ack()
         
-        if result:
-            # result is now a list of tuples (url, prompt)
-            ideogram_images = result
-            logger.info(f"Successfully generated {len(ideogram_images)} images")
-            
-            # Create blocks for Slack message with both prompts
-            blocks = [
-                {
-                    "type": "header",
-                    "text": {
-                        "type": "plain_text",
-                        "text": f"🎨 Generated {len(ideogram_images)} images",
-                        "emoji": True
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": "*📝 Original Prompt:*\n```" + prompt + "```"
-                    }
-                },
-                {
-                    "type": "divider"
-                }
-            ]
-            
-            # Add each image with its enhanced prompt and download link
-            for i, (image_url, image_prompt) in enumerate(ideogram_images, 1):
-                blocks.extend([
+        # Get the prompt from the command
+        prompt = command['text']
+        
+        # Tell user we're working on it
+        respond(f"Working on generating images for: '{prompt}'...")
+        
+        # Generate image with Ideogram
+        ideogram_image = generate_ideogram_image(prompt)
+        
+        if ideogram_image:
+            logger.info("Successfully generated image")
+            # Post the image back to Slack with a direct download link
+            respond({
+                "blocks": [
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"*✨ Enhanced Prompt for Image {i}:*\n```{image_prompt}```"
+                            "text": f"Here's your generated image for: *{prompt}*"
                         }
                     },
                     {
                         "type": "image",
                         "title": {
                             "type": "plain_text",
-                            "text": f"Generated Image {i}"
+                            "text": "Generated Image"
                         },
-                        "image_url": image_url,
-                        "alt_text": f"AI generated image {i}"
+                        "image_url": ideogram_image,
+                        "alt_text": "AI generated image"
                     },
                     {
-                        "type": "context",
-                        "elements": [
-                            {
-                                "type": "mrkdwn",
-                                "text": f"🔗 <{image_url}|Click to download>"
-                            }
-                        ]
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"<{ideogram_image}|Download Image>"
+                        }
                     }
-                ])
-                
-                # Only add divider if it's not the last image
-                if i < len(ideogram_images):
-                    blocks.append({
-                        "type": "divider"
-                    })
-            
-            # Check if we're in the public channel
-            public_channel_id = os.getenv('PUBLIC_CHANNEL_ID')
-            current_channel_id = command['channel_id']
-            
-            logger.info("Visibility Check:")
-            logger.info(f"Current Channel ID: {current_channel_id}")
-            logger.info(f"Public Channel ID: {public_channel_id}")
-            
-            response_payload = {
-                "blocks": blocks,
-                "unfurl_links": False,
-                "unfurl_media": False,
-                "parse": "none",
-                "response_type": "in_channel" if public_channel_id and current_channel_id == public_channel_id else "ephemeral"
-            }
-            respond(response_payload)
+                ],
+                "unfurl_links": False  # Prevent link previews
+            })
         else:
-            logger.error("Failed to generate images")
-            respond("Sorry, I couldn't generate the images. Please try again.")
+            logger.error("Failed to generate image")
+            respond("Sorry, I couldn't generate an image. Please try again.")
             
     except Exception as e:
         logger.error(f"Error in command handler: {str(e)}")
