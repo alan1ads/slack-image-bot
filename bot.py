@@ -55,44 +55,53 @@ def handle_generate_command(ack, respond, command):
         respond(f"Working on generating images for: '{prompt}'...")
         
         # Generate image with Ideogram
-        ideogram_image = generate_ideogram_image(prompt)
-        logger.debug(f"Generated image URL: {ideogram_image}")
+        ideogram_images = generate_ideogram_image(prompt)
+        logger.debug(f"Generated image URLs: {ideogram_images}")
         
-        if ideogram_image:
-            logger.info("Successfully generated image")
-            # Post the image back to Slack with a direct download link
-            response = respond({
-                "blocks": [
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"Here's your generated image for: *{prompt}*"
-                        }
-                    },
-                    {
-                        "type": "image",
-                        "title": {
-                            "type": "plain_text",
-                            "text": "Generated Image"
-                        },
-                        "image_url": ideogram_image,
-                        "alt_text": "AI generated image"
-                    },
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"<{ideogram_image}|Download Image>"
-                        }
+        if ideogram_images:
+            logger.info("Successfully generated images")
+            # Assuming generate_ideogram_image returns a list of URLs
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"Here's your generated image for: *{prompt}*"
                     }
-                ],
+                }
+            ]
+            
+            # Add each image as a separate block
+            for image_url, _ in ideogram_images:
+                blocks.append({
+                    "type": "image",
+                    "title": {
+                        "type": "plain_text",
+                        "text": "Generated Image"
+                    },
+                    "image_url": image_url,
+                    "alt_text": "AI generated image"
+                })
+            
+            # Add a download link section
+            download_links = "\n".join([f"<{url}|Download Image>" for url, _ in ideogram_images])
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": download_links
+                }
+            })
+            
+            # Post the image back to Slack
+            response = respond({
+                "blocks": blocks,
                 "unfurl_links": False  # Prevent link previews
             })
             logger.debug(f"Slack response: {response}")
         else:
-            logger.error("Failed to generate image")
-            respond("Sorry, I couldn't generate an image. Please try again.")
+            logger.error("Failed to generate images")
+            respond("Sorry, I couldn't generate images. Please try again.")
             
     except Exception as e:
         logger.error(f"Error in command handler: {str(e)}")
