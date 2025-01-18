@@ -3,6 +3,7 @@ import os
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 import requests
+import time
 import logging
 import threading
 import json
@@ -86,20 +87,20 @@ def handle_generate_command(ack, respond, command):
                     }
                 },
                 {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": "*✨ Ideogram's Magic Prompt:*\n```" + enhanced_prompt + "```"
-                    }
-                },
-                {
                     "type": "divider"
                 }
             ]
             
-            # Add each image and its download link
-            for i, image_url in enumerate(ideogram_images, 1):
+            # Add each image with its enhanced prompt and download link
+            for i, (image_url, image_prompt) in enumerate(ideogram_images, 1):
                 blocks.extend([
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*✨ Enhanced Prompt for Image {i}:*\n```{image_prompt}```"
+                        }
+                    },
                     {
                         "type": "image",
                         "title": {
@@ -115,6 +116,9 @@ def handle_generate_command(ack, respond, command):
                             "type": "mrkdwn",
                             "text": f"<{image_url}|📥 Download Image {i}>"
                         }
+                    },
+                    {
+                        "type": "divider"
                     }
                 ])
             
@@ -173,7 +177,6 @@ def generate_ideogram_image(prompt, num_images=5):
             json=data
         )
         
-        # Log the complete response for debugging
         logger.info("=== IDEOGRAM API RESPONSE ===")
         logger.info(f"Status Code: {response.status_code}")
         response_json = response.json()
@@ -188,23 +191,38 @@ def generate_ideogram_image(prompt, num_images=5):
             
         # Get the response content and check each possible location for the magic prompt
         response_json = response.json()
-        enhanced_prompts = []
+        enhanced_prompt = None
         
-        logger.info("Checking for magic prompts in response...")
+        logger.info("Checking for magic prompt in response...")
         
-        # Collect all unique prompts from the data array
-        if 'data' in response_json and response_json['data']:
-            for image_data in response_json['data']:
-                if 'prompt' in image_data:
-                    if image_data['prompt'] not in enhanced_prompts:
-                        enhanced_prompts.append(image_data['prompt'])
+        # Check all possible locations in order of likelihood
+        possible_locations = [
+            ('image_request', 'enhanced_prompt'),
+            ('image_request', 'magic_prompt'),
+            ('image_request', 'generated_prompt'),
+            ('generated_prompt',),
+            ('magic_prompt',),
+            ('enhanced_prompt',),
+            ('prompt',)
+        ]
         
-        if not enhanced_prompts:
-            logger.info("No magic prompts found in response")
-            enhanced_prompt_text = "_Auto-enhancement active, but enhanced prompt not visible in API response_"
-        else:
-            logger.info(f"Found {len(enhanced_prompts)} magic prompts")
-            enhanced_prompt_text = "\n\n".join([f"Image {i+1}:\n{prompt}" for i, prompt in enumerate(enhanced_prompts)])
+        for path in possible_locations:
+            current = response_json
+            found = True
+            for key in path:
+                if key in current:
+                    current = current[key]
+                else:
+                    found = False
+                    break
+            if found and isinstance(current, str) and current != prompt:
+                enhanced_prompt = current
+                logger.info(f"Found magic prompt at path {'.'.join(path)}: {enhanced_prompt}")
+                break
+                
+        if not enhanced_prompt:
+            logger.info("No magic prompt found in any known location")
+            enhanced_prompt = "_Auto-enhancement active, but enhanced prompt not visible in API response_"
         
         if 'data' in response_json and response_json['data']:
             image_urls = []
@@ -216,8 +234,8 @@ def generate_ideogram_image(prompt, num_images=5):
             if len(image_urls) < num_images:
                 logger.warning(f"Requested {num_images} images but only received {len(image_urls)}")
             
-            # Return both image URLs and enhanced prompts
-            return image_urls, enhanced_prompt_text
+            # Return both image URLs and enhanced prompt
+            return image_urls, enhanced_prompt if enhanced_prompt else None
         else:
             logger.error("No image data found in response")
             logger.debug(f"Full response: {response_json}")
