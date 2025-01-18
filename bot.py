@@ -6,6 +6,7 @@ import requests
 import time
 import logging
 import threading
+import json
 from flask import Flask, jsonify
 
 # Set up logging
@@ -71,35 +72,31 @@ def handle_generate_command(ack, respond, command):
             # Create blocks for Slack message with both prompts
             blocks = [
                 {
-                    "type": "section",
+                    "type": "header",
                     "text": {
-                        "type": "mrkdwn",
-                        "text": f"🎨 *Generated {len(ideogram_images)} images with:*"
+                        "type": "plain_text",
+                        "text": f"🎨 Generated {len(ideogram_images)} images",
+                        "emoji": True
                     }
                 },
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"📝 *Original Prompt:*\n{prompt}"
+                        "text": "*📝 Original Prompt:*\n```" + prompt + "```"
                     }
-                }
-            ]
-
-            # Add enhanced prompt if available
-            if enhanced_prompt:
-                blocks.append({
+                },
+                {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"✨ *Ideogram's Magic Prompt:*\n{enhanced_prompt}"
+                        "text": "*✨ Ideogram's Magic Prompt:*\n```" + enhanced_prompt + "```"
                     }
-                })
-            
-            # Add divider before images
-            blocks.append({
-                "type": "divider"
-            })
+                },
+                {
+                    "type": "divider"
+                }
+            ]
             
             # Add each image and its download link
             for i, image_url in enumerate(ideogram_images, 1):
@@ -175,29 +172,17 @@ def generate_ideogram_image(prompt, num_images=5):
             json=data
         )
         
-        # Print the entire response for debugging
-        response_json = response.json()
-        logger.info("Complete API Response:")
-        logger.info(f"{response_json}")
+        logger.info(f"Received response from Ideogram API. Status code: {response.status_code}")
         
-        # Log specific sections we're interested in
-        logger.info("Top level keys in response:")
-        logger.info(f"{list(response_json.keys())}")
-        
-        if 'image_request' in response_json:
-            logger.info("image_request contents:")
-            logger.info(f"{response_json['image_request']}")
+        if response.status_code != 200:
+            logger.error(f"Ideogram API error. Status code: {response.status_code}")
+            logger.error(f"Response content: {response.text}")
+            return None
             
-        if 'magic_prompt' in response_json:
-            logger.info("Found magic_prompt at top level:")
-            logger.info(f"{response_json['magic_prompt']}")
-            
-        if 'data' in response_json:
-            logger.info("First image data:")
-            logger.info(f"{response_json['data'][0] if response_json['data'] else 'No images'}")
-        
         # Check for enhanced prompt in the response
         enhanced_prompt = None
+        response_json = response.json()
+        
         # First check for magic_prompt in the response
         if 'magic_prompt' in response_json:
             enhanced_prompt = response_json['magic_prompt']
@@ -217,7 +202,8 @@ def generate_ideogram_image(prompt, num_images=5):
         
         if not enhanced_prompt:
             logger.info("No magic prompt found in the response")
-            enhanced_prompt = "_Auto-enhancement active, but enhanced prompt not provided in API response_"        
+            enhanced_prompt = "_Auto-enhancement active, but enhanced prompt not provided in API response_"
+        
         if 'data' in response_json and response_json['data']:
             image_urls = []
             for image_data in response_json['data']:
