@@ -5,6 +5,8 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 import requests
 import time
 import logging
+import threading
+from flask import Flask, jsonify
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -12,6 +14,13 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+
+# Initialize Flask app for health checks
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def health_check():
+    return jsonify({"status": "healthy"})
 
 # Print environment check (without exposing tokens)
 logger.info("Environment variables check:")
@@ -146,13 +155,22 @@ def generate_ideogram_image(prompt):
         logger.error(f"Error generating image: {str(e)}")
         return None
 
-# Start the app
+def run_slack_app():
+    handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
+    handler.start()
+
+# Start both Flask and Slack apps
 if __name__ == "__main__":
     try:
-        handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
+        # Start Slack app in a separate thread
+        slack_thread = threading.Thread(target=run_slack_app)
+        slack_thread.start()
         logger.info("⚡️ Socket Mode Handler initialized successfully")
         logger.info("⚡️ Slack bot is starting up...")
-        handler.start()
+        
+        # Start Flask app
+        port = int(os.environ.get("PORT", 8080))
+        flask_app.run(host='0.0.0.0', port=port)
     except Exception as e:
         logger.error(f"Failed to start the bot: {str(e)}")
         raise
