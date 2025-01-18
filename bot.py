@@ -156,15 +156,12 @@ def generate_ideogram_image(prompt, num_images=5):
     }
     
     data = {
-        'image_request': {
-            'prompt': prompt,
-            'aspect_ratio': 'ASPECT_10_16',
-            'model': 'V_2',
-            'magic_prompt_option': 'AUTO',
-            'num_images': num_images,
-            'return_magic_prompt': True,
-            'return_generated_prompt': True  # Request the generated prompt
-        }
+        "prompt": prompt,
+        "model": "V_2",
+        "magic_prompt": "AUTO",  # Changed from magic_prompt_option
+        "upscale": True,
+        "style_preset": None,
+        "num": num_images  # Changed from num_images
     }
     
     try:
@@ -199,23 +196,28 @@ def generate_ideogram_image(prompt, num_images=5):
             logger.info("First image data:")
             logger.info(f"{response_json['data'][0] if response_json['data'] else 'No images'}")
         
-        # Check for enhanced prompt in various possible locations
+        # Check for enhanced prompt in the response
         enhanced_prompt = None
-        if 'generated_prompt' in response_json:
-            enhanced_prompt = response_json['generated_prompt']
-        elif 'magic_prompt' in response_json:
+        # First check for magic_prompt in the response
+        if 'magic_prompt' in response_json:
             enhanced_prompt = response_json['magic_prompt']
-        elif 'image_request' in response_json:
-            if 'generated_prompt' in response_json['image_request']:
-                enhanced_prompt = response_json['image_request']['generated_prompt']
-            elif 'magic_prompt' in response_json['image_request']:
-                enhanced_prompt = response_json['image_request']['magic_prompt']
-            elif 'enhanced_prompt' in response_json['image_request']:
-                enhanced_prompt = response_json['image_request']['enhanced_prompt']
+            logger.info(f"Found magic prompt in response: {enhanced_prompt}")
+        # Then check in the generation_data if it exists
+        elif 'generation_data' in response_json and 'magic_prompt' in response_json['generation_data']:
+            enhanced_prompt = response_json['generation_data']['magic_prompt']
+            logger.info(f"Found magic prompt in generation_data: {enhanced_prompt}")
+        # Finally check in the prompt field if it's different from the original
+        elif 'prompt' in response_json and response_json['prompt'] != prompt:
+            enhanced_prompt = response_json['prompt']
+            logger.info(f"Found enhanced prompt in prompt field: {enhanced_prompt}")
+            
+        # Log the entire response for debugging
+        logger.info("Full API Response for debugging:")
+        logger.info(json.dumps(response_json, indent=2))
         
         if not enhanced_prompt:
             logger.info("No magic prompt found in the response")
-            enhanced_prompt = "_Magic prompt not available for this generation_"  # Italic fallback message        
+            enhanced_prompt = "_Auto-enhancement active, but enhanced prompt not provided in API response_"        
         if 'data' in response_json and response_json['data']:
             image_urls = []
             for image_data in response_json['data']:
