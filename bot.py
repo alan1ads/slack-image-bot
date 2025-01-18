@@ -61,7 +61,7 @@ logger.info(f"SLACK_APP_TOKEN exists: {bool(os.getenv('SLACK_APP_TOKEN'))}")
 logger.info(f"IDEOGRAM_API_KEY exists: {bool(os.getenv('IDEOGRAM_API_KEY'))}")
 
 # Initialize the visibility controller with your public channel ID
-visibility_controller = SlackVisibilityController(public_channel_id="C0123ABCDEF")  # Replace with your actual channel ID
+visibility_controller = SlackVisibilityController(public_channel_id="C089KSZG5A5")  # Replace with your actual channel ID
 
 try:
     # Initialize the Slack app with additional debugging
