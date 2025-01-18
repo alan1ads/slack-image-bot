@@ -114,11 +114,13 @@ def handle_generate_command(ack, respond, command):
                         "alt_text": f"AI generated image {i}"
                     },
                     {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"🔗 *Download:* <{image_url}|Download Image {i}>"
-                        }
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": f"🔗 <{image_url}|Click to download>"
+                            }
+                        ]
                     }
                 ])
                 
@@ -139,7 +141,8 @@ def handle_generate_command(ack, respond, command):
             response_payload = {
                 "blocks": blocks,
                 "unfurl_links": False,
-                "unfurl_media": False,  # Added to prevent media unfurling
+                "unfurl_media": False,
+                "parse": "none",
                 "response_type": "in_channel" if public_channel_id and current_channel_id == public_channel_id else "ephemeral"
             }
             respond(response_payload)
