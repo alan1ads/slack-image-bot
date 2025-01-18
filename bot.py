@@ -117,7 +117,7 @@ def handle_generate_command(ack, respond, command):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"🔗 *Download:* <{image_url}|Click here to download image {i}>"
+                            "text": f"🔗 *Download:* <{image_url}|Download Image {i}>"
                         }
                     }
                 ])
@@ -139,6 +139,7 @@ def handle_generate_command(ack, respond, command):
             response_payload = {
                 "blocks": blocks,
                 "unfurl_links": False,
+                "unfurl_media": False,  # Added to prevent media unfurling
                 "response_type": "in_channel" if public_channel_id and current_channel_id == public_channel_id else "ephemeral"
             }
             respond(response_payload)
