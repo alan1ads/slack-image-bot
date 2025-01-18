@@ -13,6 +13,37 @@ from flask import Flask, jsonify
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+# Visibility Controller Class
+class SlackVisibilityController:
+    def __init__(self, public_channel_id):
+        self.public_channel_id = public_channel_id
+        
+    def respond_with_visibility(self, respond, blocks, channel_id, user_id):
+        """
+        Responds with appropriate visibility based on the channel
+        
+        Args:
+            respond: Slack respond function
+            blocks: Message blocks to send
+            channel_id: ID of the channel where command was triggered
+            user_id: ID of the user who triggered the command
+        """
+        # Determine if message should be public or ephemeral
+        is_public_channel = channel_id == self.public_channel_id
+        
+        if is_public_channel:
+            # Post public message
+            return respond({
+                "blocks": blocks,
+                "response_type": "in_channel"  # Makes the response visible to everyone
+            })
+        else:
+            # Post ephemeral message (only visible to the user who triggered it)
+            return respond({
+                "blocks": blocks,
+                "response_type": "ephemeral"  # Makes the response visible only to the user
+            })
+
 # Load environment variables
 load_dotenv()
 
@@ -28,6 +59,9 @@ logger.info("Environment variables check:")
 logger.info(f"SLACK_BOT_TOKEN exists: {bool(os.getenv('SLACK_BOT_TOKEN'))}")
 logger.info(f"SLACK_APP_TOKEN exists: {bool(os.getenv('SLACK_APP_TOKEN'))}")
 logger.info(f"IDEOGRAM_API_KEY exists: {bool(os.getenv('IDEOGRAM_API_KEY'))}")
+
+# Initialize the visibility controller with your public channel ID
+visibility_controller = SlackVisibilityController(public_channel_id="C0123ABCDEF")  # Replace with your actual channel ID
 
 try:
     # Initialize the Slack app with additional debugging
@@ -58,8 +92,11 @@ def handle_generate_command(ack, respond, command):
         except ValueError:
             num_images = 5  # keep default of 5 if invalid input
     
-    # Tell user we're working on it
-    respond(f"Working on generating {num_images} images for: '{prompt}'...")
+    # Tell user we're working on it (always ephemeral)
+    respond({
+        "text": f"Working on generating {num_images} images for: '{prompt}'...",
+        "response_type": "ephemeral"
+    })
     
     try:
         # Generate images with Ideogram
@@ -123,14 +160,26 @@ def handle_generate_command(ack, respond, command):
                     }
                 ])
             
-            respond({"blocks": blocks})
+            # Use visibility controller to handle the response
+            visibility_controller.respond_with_visibility(
+                respond=respond,
+                blocks=blocks,
+                channel_id=command['channel_id'],
+                user_id=command['user_id']
+            )
         else:
             logger.error("Failed to generate images")
-            respond("Sorry, I couldn't generate the images. Please try again.")
+            respond({
+                "text": "Sorry, I couldn't generate the images. Please try again.",
+                "response_type": "ephemeral"
+            })
             
     except Exception as e:
         logger.error(f"Error in command handler: {str(e)}")
-        respond(f"Error: {str(e)}")
+        respond({
+            "text": f"Error: {str(e)}",
+            "response_type": "ephemeral"
+        })
 
 def generate_ideogram_image(prompt, num_images=5):
     """
