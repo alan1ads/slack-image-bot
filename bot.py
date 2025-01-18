@@ -3,7 +3,6 @@ import os
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 import requests
-import time
 import logging
 import threading
 import json
