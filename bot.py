@@ -28,21 +28,18 @@ class SlackVisibilityController:
             channel_id: ID of the channel where command was triggered
             user_id: ID of the user who triggered the command
         """
-        # Determine if message should be public or ephemeral
-        is_public_channel = channel_id == self.public_channel_id
+        logger.info(f"Channel ID from command: {channel_id}")
+        logger.info(f"Public channel ID: {self.public_channel_id}")
         
-        if is_public_channel:
-            # Post public message
-            return respond({
-                "blocks": blocks,
-                "response_type": "in_channel"  # Makes the response visible to everyone
-            })
+        # Determine if message should be public or ephemeral
+        if channel_id == self.public_channel_id:
+            logger.info("Posting public message in designated channel")
+            # Public response in the specified channel
+            return respond({"blocks": blocks, "response_type": "in_channel"})
         else:
-            # Post ephemeral message (only visible to the user who triggered it)
-            return respond({
-                "blocks": blocks,
-                "response_type": "ephemeral"  # Makes the response visible only to the user
-            })
+            logger.info("Posting ephemeral message")
+            # Ephemeral response in all other channels
+            return respond({"blocks": blocks})
 
 # Load environment variables
 load_dotenv()
@@ -60,8 +57,10 @@ logger.info(f"SLACK_BOT_TOKEN exists: {bool(os.getenv('SLACK_BOT_TOKEN'))}")
 logger.info(f"SLACK_APP_TOKEN exists: {bool(os.getenv('SLACK_APP_TOKEN'))}")
 logger.info(f"IDEOGRAM_API_KEY exists: {bool(os.getenv('IDEOGRAM_API_KEY'))}")
 
-# Initialize the visibility controller with your public channel ID
-visibility_controller = SlackVisibilityController(public_channel_id="C089KSZG5A5")  # Replace with your actual channel ID
+# Initialize the visibility controller with public channel ID from environment
+visibility_controller = SlackVisibilityController(
+    public_channel_id=os.environ.get("PUBLIC_CHANNEL_ID")
+)
 
 try:
     # Initialize the Slack app with additional debugging
