@@ -13,34 +13,6 @@ from flask import Flask, jsonify
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Visibility Controller Class
-class SlackVisibilityController:
-    def __init__(self, public_channel_id):
-        self.public_channel_id = public_channel_id
-        
-    def respond_with_visibility(self, respond, blocks, channel_id, user_id):
-        """
-        Responds with appropriate visibility based on the channel
-        
-        Args:
-            respond: Slack respond function
-            blocks: Message blocks to send
-            channel_id: ID of the channel where command was triggered
-            user_id: ID of the user who triggered the command
-        """
-        logger.info(f"Channel ID from command: {channel_id}")
-        logger.info(f"Public channel ID: {self.public_channel_id}")
-        
-        # Determine if message should be public or ephemeral
-        if channel_id == self.public_channel_id:
-            logger.info("Posting public message in designated channel")
-            # Public response in the specified channel
-            return respond({"blocks": blocks, "response_type": "in_channel"})
-        else:
-            logger.info("Posting ephemeral message")
-            # Ephemeral response in all other channels
-            return respond({"blocks": blocks})
-
 # Load environment variables
 load_dotenv()
 
@@ -59,11 +31,6 @@ logger.info(f"IDEOGRAM_API_KEY exists: {bool(os.getenv('IDEOGRAM_API_KEY'))}")
 logger.info(f"PUBLIC_CHANNEL_ID exists: {bool(os.getenv('PUBLIC_CHANNEL_ID'))}")
 logger.info(f"PUBLIC_CHANNEL_ID value: {os.getenv('PUBLIC_CHANNEL_ID')}")
 
-# Initialize the visibility controller with public channel ID from environment
-visibility_controller = SlackVisibilityController(
-    public_channel_id=os.environ.get("PUBLIC_CHANNEL_ID")
-)
-
 try:
     # Initialize the Slack app with additional debugging
     app = App(token=os.environ["SLACK_BOT_TOKEN"])
@@ -75,14 +42,7 @@ except Exception as e:
 # Handle the /generate command
 @app.command("/generate")
 def handle_generate_command(ack, respond, command):
-    logger.info("========== NEW COMMAND RECEIVED ==========")
-    logger.info(f"Command data: {command}")
-    logger.info(f"Channel ID: {command.get('channel_id')}")
-    logger.info(f"Channel Name: {command.get('channel_name')}")
-    logger.info(f"User ID: {command.get('user_id')}")
-    logger.info(f"Public Channel ID from env: {os.getenv('PUBLIC_CHANNEL_ID')}")
-    logger.info("=========================================")
-    
+    logger.info(f"Received command: {command}")
     # Acknowledge command received
     ack()
     
@@ -100,11 +60,8 @@ def handle_generate_command(ack, respond, command):
         except ValueError:
             num_images = 5  # keep default of 5 if invalid input
     
-    # Tell user we're working on it (always ephemeral)
-    respond({
-        "text": f"Working on generating {num_images} images for: '{prompt}'...",
-        "response_type": "ephemeral"
-    })
+    # Tell user we're working on it
+    respond(f"Working on generating {num_images} images for: '{prompt}'...")
     
     try:
         # Generate images with Ideogram
@@ -160,7 +117,7 @@ def handle_generate_command(ack, respond, command):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"<{image_url}|📥 Download Image {i}>"
+                            "text": f"🔗 *Download:* <{image_url}|Click here to download image {i}>"
                         }
                     }
                 ])
@@ -179,28 +136,19 @@ def handle_generate_command(ack, respond, command):
             logger.info(f"Current Channel ID: {current_channel_id}")
             logger.info(f"Public Channel ID: {public_channel_id}")
             
-            # Prepare response payload
             response_payload = {
                 "blocks": blocks,
+                "unfurl_links": False,
                 "response_type": "in_channel" if public_channel_id and current_channel_id == public_channel_id else "ephemeral"
             }
-            
-            # Send single response
-            logger.info(f"Sending response (visibility: {response_payload['response_type']})")
             respond(response_payload)
         else:
             logger.error("Failed to generate images")
-            respond({
-                "text": "Sorry, I couldn't generate the images. Please try again.",
-                "response_type": "ephemeral"
-            })
+            respond("Sorry, I couldn't generate the images. Please try again.")
             
     except Exception as e:
         logger.error(f"Error in command handler: {str(e)}")
-        respond({
-            "text": f"Error: {str(e)}",
-            "response_type": "ephemeral"
-        })
+        respond(f"Error: {str(e)}")
 
 def generate_ideogram_image(prompt, num_images=5):
     """
