@@ -153,12 +153,14 @@ def generate_ideogram_image(prompt, num_images=5):
     }
     
     data = {
-        "prompt": prompt,
-        "model": "V_2",
-        "magic_prompt": "AUTO",  # Changed from magic_prompt_option
-        "upscale": True,
-        "style_preset": None,
-        "num": num_images  # Changed from num_images
+        'image_request': {
+            'prompt': prompt,
+            'aspect_ratio': 'ASPECT_10_16',
+            'model': 'V_2',
+            'magic_prompt': 'AUTO',  # Changed from magic_prompt_option
+            'num_images': num_images,  # Keep using num_images
+            'upscale': True
+        }
     }
     
     try:
