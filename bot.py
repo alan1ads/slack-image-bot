@@ -75,7 +75,14 @@ except Exception as e:
 # Handle the /generate command
 @app.command("/generate")
 def handle_generate_command(ack, respond, command):
-    logger.info(f"Received command: {command}")
+    logger.info("========== NEW COMMAND RECEIVED ==========")
+    logger.info(f"Command data: {command}")
+    logger.info(f"Channel ID: {command.get('channel_id')}")
+    logger.info(f"Channel Name: {command.get('channel_name')}")
+    logger.info(f"User ID: {command.get('user_id')}")
+    logger.info(f"Public Channel ID from env: {os.getenv('PUBLIC_CHANNEL_ID')}")
+    logger.info("=========================================")
+    
     # Acknowledge command received
     ack()
     
@@ -169,17 +176,18 @@ def handle_generate_command(ack, respond, command):
             logger.info(f"Current Channel ID: {current_channel_id}")
             logger.info(f"Public Channel ID: {public_channel_id}")
             
+            # Create the response payload
+            response_payload = {
+                "blocks": blocks
+            }
+            
+            # Add response_type only if in public channel
             if public_channel_id and current_channel_id == public_channel_id:
                 logger.info("Publishing message to channel (public)")
-                respond({
-                    "blocks": blocks,
-                    "response_type": "in_channel"
-                })
-            else:
-                logger.info("Sending ephemeral message (private)")
-                respond({
-                    "blocks": blocks
-                })
+                response_payload["response_type"] = "in_channel"
+                
+            logger.info(f"Sending response with payload: {response_payload.get('response_type', 'ephemeral')}")
+            respond(response_payload)
         else:
             logger.error("Failed to generate images")
             respond({
