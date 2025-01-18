@@ -223,8 +223,7 @@ def generate_ideogram_image(prompt, num_images=5):
         response = requests.post(
             'https://api.ideogram.ai/generate',
             headers=headers,
-            json=data,
-            timeout=10  # Set a timeout of 10 seconds
+            json=data
         )
         
         logger.info(f"Received response from Ideogram API. Status code: {response.status_code}")
