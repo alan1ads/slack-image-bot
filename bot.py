@@ -162,11 +162,14 @@ def handle_generate_command(ack, respond, command):
                             "type": "mrkdwn",
                             "text": f"<{image_url}|📥 Download Image {i}>"
                         }
-                    },
-                    {
-                        "type": "divider"
                     }
                 ])
+                
+                # Only add divider if it's not the last image
+                if i < len(ideogram_images):
+                    blocks.append({
+                        "type": "divider"
+                    })
             
             # Check if we're in the public channel
             public_channel_id = os.getenv('PUBLIC_CHANNEL_ID')
@@ -176,17 +179,14 @@ def handle_generate_command(ack, respond, command):
             logger.info(f"Current Channel ID: {current_channel_id}")
             logger.info(f"Public Channel ID: {public_channel_id}")
             
-            # Create the response payload
+            # Prepare response payload
             response_payload = {
-                "blocks": blocks
+                "blocks": blocks,
+                "response_type": "in_channel" if public_channel_id and current_channel_id == public_channel_id else "ephemeral"
             }
             
-            # Add response_type only if in public channel
-            if public_channel_id and current_channel_id == public_channel_id:
-                logger.info("Publishing message to channel (public)")
-                response_payload["response_type"] = "in_channel"
-                
-            logger.info(f"Sending response with payload: {response_payload.get('response_type', 'ephemeral')}")
+            # Send single response
+            logger.info(f"Sending response (visibility: {response_payload['response_type']})")
             respond(response_payload)
         else:
             logger.error("Failed to generate images")
