@@ -56,6 +56,8 @@ logger.info("Environment variables check:")
 logger.info(f"SLACK_BOT_TOKEN exists: {bool(os.getenv('SLACK_BOT_TOKEN'))}")
 logger.info(f"SLACK_APP_TOKEN exists: {bool(os.getenv('SLACK_APP_TOKEN'))}")
 logger.info(f"IDEOGRAM_API_KEY exists: {bool(os.getenv('IDEOGRAM_API_KEY'))}")
+logger.info(f"PUBLIC_CHANNEL_ID exists: {bool(os.getenv('PUBLIC_CHANNEL_ID'))}")
+logger.info(f"PUBLIC_CHANNEL_ID value: {os.getenv('PUBLIC_CHANNEL_ID')}")
 
 # Initialize the visibility controller with public channel ID from environment
 visibility_controller = SlackVisibilityController(
@@ -160,18 +162,21 @@ def handle_generate_command(ack, respond, command):
                 ])
             
             # Check if we're in the public channel
-            is_public = command['channel_id'] == os.environ.get("PUBLIC_CHANNEL_ID")
-            logger.info(f"Channel ID: {command['channel_id']}")
-            logger.info(f"Public Channel ID: {os.environ.get('PUBLIC_CHANNEL_ID')}")
-            logger.info(f"Is public channel: {is_public}")
+            public_channel_id = os.getenv('PUBLIC_CHANNEL_ID')
+            current_channel_id = command['channel_id']
             
-            # Send response with appropriate visibility
-            if is_public:
+            logger.info("Visibility Check:")
+            logger.info(f"Current Channel ID: {current_channel_id}")
+            logger.info(f"Public Channel ID: {public_channel_id}")
+            
+            if public_channel_id and current_channel_id == public_channel_id:
+                logger.info("Publishing message to channel (public)")
                 respond({
                     "blocks": blocks,
                     "response_type": "in_channel"
                 })
             else:
+                logger.info("Sending ephemeral message (private)")
                 respond({
                     "blocks": blocks
                 })
