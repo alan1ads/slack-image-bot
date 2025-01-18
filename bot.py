@@ -173,6 +173,7 @@ def generate_ideogram_image(prompt, num_images=5):
             json=data
         )
         
+        # Log the complete response for debugging
         logger.info("=== IDEOGRAM API RESPONSE ===")
         logger.info(f"Status Code: {response.status_code}")
         response_json = response.json()
@@ -191,34 +192,22 @@ def generate_ideogram_image(prompt, num_images=5):
         
         logger.info("Checking for magic prompt in response...")
         
-        # Check all possible locations in order of likelihood
-        possible_locations = [
-            ('image_request', 'enhanced_prompt'),
-            ('image_request', 'magic_prompt'),
-            ('image_request', 'generated_prompt'),
-            ('generated_prompt',),
-            ('magic_prompt',),
-            ('enhanced_prompt',),
-            ('prompt',)
-        ]
+        # First check if the prompt is in the main response
+        if 'magic_prompt' in response_json:
+            enhanced_prompt = response_json['magic_prompt']
+        # Then check in the data array
+        elif 'data' in response_json and response_json['data']:
+            first_image = response_json['data'][0]
+            if 'magic_prompt' in first_image:
+                enhanced_prompt = first_image['magic_prompt']
+            elif 'enhanced_prompt' in first_image:
+                enhanced_prompt = first_image['enhanced_prompt']
         
-        for path in possible_locations:
-            current = response_json
-            found = True
-            for key in path:
-                if key in current:
-                    current = current[key]
-                else:
-                    found = False
-                    break
-            if found and isinstance(current, str) and current != prompt:
-                enhanced_prompt = current
-                logger.info(f"Found magic prompt at path {'.'.join(path)}: {enhanced_prompt}")
-                break
-                
         if not enhanced_prompt:
-            logger.info("No magic prompt found in any known location")
+            logger.info("No magic prompt found in response")
             enhanced_prompt = "_Auto-enhancement active, but enhanced prompt not visible in API response_"
+        else:
+            logger.info(f"Found magic prompt: {enhanced_prompt}")
         
         if 'data' in response_json and response_json['data']:
             image_urls = []
