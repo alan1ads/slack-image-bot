@@ -62,21 +62,32 @@ def handle_generate_command(ack, respond, command):
     
     try:
         # Generate images with Ideogram
-        ideogram_images = generate_ideogram_image(prompt, num_images)
+        result = generate_ideogram_image(prompt, num_images)
         
-        if ideogram_images:
+        if result:
+            ideogram_images, enhanced_prompt = result
             logger.info(f"Successfully generated {len(ideogram_images)} images")
             
-            # Create blocks for Slack message
+            # Create blocks for Slack message with both prompts
             blocks = [
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"Here are your {len(ideogram_images)} generated images for: *{prompt}*"
+                        "text": f"Here are your {len(ideogram_images)} generated images for:\n*Original prompt:* {prompt}"
                     }
                 }
             ]
+
+            # Add enhanced prompt if available
+            if enhanced_prompt:
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Enhanced prompt:* {enhanced_prompt}"
+                    }
+                })
             
             # Add each image and its download link
             for i, image_url in enumerate(ideogram_images, 1):
@@ -117,7 +128,7 @@ def generate_ideogram_image(prompt, num_images=5):
         num_images (int): Number of images to generate (default: 5)
     
     Returns:
-        list: List of image URLs
+        tuple: (list of image URLs, enhanced prompt if available)
     """
     logger.info(f"Attempting to generate {num_images} images with prompt: {prompt}")
     
@@ -138,7 +149,7 @@ def generate_ideogram_image(prompt, num_images=5):
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
             'magic_prompt_option': 'AUTO',
-            'num_images': num_images  # Include num_images in the image_request
+            'num_images': num_images
         }
     }
     
@@ -160,8 +171,14 @@ def generate_ideogram_image(prompt, num_images=5):
             logger.error(f"Response content: {response.text}")
             return None
             
+        # Store the enhanced prompt if available
+        enhanced_prompt = None
         response_json = response.json()
         logger.debug(f"Full API Response: {response_json}")
+        
+        if 'enhanced_prompt' in response_json:
+            enhanced_prompt = response_json['enhanced_prompt']
+            logger.info(f"Enhanced prompt: {enhanced_prompt}")
         
         if 'data' in response_json and response_json['data']:
             image_urls = []
@@ -172,7 +189,9 @@ def generate_ideogram_image(prompt, num_images=5):
             logger.info(f"Successfully extracted {len(image_urls)} image URLs from response")
             if len(image_urls) < num_images:
                 logger.warning(f"Requested {num_images} images but only received {len(image_urls)}")
-            return image_urls
+            
+            # Return both image URLs and enhanced prompt
+            return image_urls, enhanced_prompt if enhanced_prompt else None
         else:
             logger.error("No image data found in response")
             logger.debug(f"Full response: {response_json}")
