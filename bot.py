@@ -61,7 +61,7 @@ def handle_generate_command(ack, respond, command):
         if ideogram_image:
             logger.info("Successfully generated image")
             # Post the image back to Slack with a direct download link
-            respond({
+            response = respond({
                 "blocks": [
                     {
                         "type": "section",
@@ -89,6 +89,7 @@ def handle_generate_command(ack, respond, command):
                 ],
                 "unfurl_links": False  # Prevent link previews
             })
+            logger.debug(f"Slack response: {response}")
         else:
             logger.error("Failed to generate image")
             respond("Sorry, I couldn't generate an image. Please try again.")
