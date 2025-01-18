@@ -23,6 +23,20 @@ flask_app = Flask(__name__)
 def health_check():
     return jsonify({"status": "healthy"})
 
+# Validate required environment variables
+required_env_vars = [
+    'SLACK_BOT_TOKEN',
+    'SLACK_APP_TOKEN',
+    'IDEOGRAM_API_KEY',
+    'PUBLIC_CHANNEL_ID'
+]
+
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
+    logger.error(error_msg)
+    raise ValueError(error_msg)
+
 # Print environment check (without exposing tokens)
 logger.info("Environment variables check:")
 logger.info(f"SLACK_BOT_TOKEN exists: {bool(os.getenv('SLACK_BOT_TOKEN'))}")
@@ -42,70 +56,142 @@ except Exception as e:
 # Handle the /generate command
 @app.command("/generate")
 def handle_generate_command(ack, respond, command):
-    try:
-        logger.info(f"Received command: {command}")
-        # Acknowledge command received
-        ack()
+    logger.info(f"Received command: {command}")
+    # Acknowledge command received
+    ack()
+    
+    # Parse command text for prompt and number of images
+    command_text = command['text']
+    parts = command_text.split('--n')
+    
+    prompt = parts[0].strip()
+    if not prompt:
+        respond("Please provide a prompt for image generation.")
+        return
         
-        # Get the prompt from the command
-        prompt = command['text']
-        logger.debug(f"Prompt received: {prompt}")
+    num_images = 5  # default to 5 images
+    
+    if len(parts) > 1:
+        try:
+            requested_num = int(parts[1].strip())
+            num_images = min(max(1, requested_num), 5)  # limit between 1 and 5 images
+        except ValueError:
+            num_images = 5  # keep default of 5 if invalid input
+    
+    try:
+        # Get channel IDs
+        public_channel_id = os.environ['PUBLIC_CHANNEL_ID']  # Will raise KeyError if not set
+        current_channel_id = command['channel_id']
+        
+        # Determine visibility mode
+        is_public = current_channel_id == public_channel_id
+        visibility_mode = "public" if is_public else "private"
+        logger.info(f"Channel visibility check - Current: {current_channel_id}, Public: {public_channel_id}, Mode: {visibility_mode}")
         
         # Tell user we're working on it
-        respond(f"Working on generating images for: '{prompt}'...")
+        initial_response = respond(f"Working on generating {num_images} images for: '{prompt}'...")
         
-        # Generate image with Ideogram
-        ideogram_images = generate_ideogram_image(prompt)
-        logger.debug(f"Generated image URLs: {ideogram_images}")
+        # Generate images with Ideogram
+        result = generate_ideogram_image(prompt, num_images)
         
-        if ideogram_images:
-            logger.info("Successfully generated images")
-            # Assuming generate_ideogram_image returns a list of URLs
+        if result:
+            # result is now a list of tuples (url, prompt)
+            ideogram_images = result
+            logger.info(f"Successfully generated {len(ideogram_images)} images")
+            
+            # Create blocks for Slack message with both prompts
             blocks = [
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": f"🎨 Generated {len(ideogram_images)} images",
+                        "emoji": True
+                    }
+                },
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"Here's your generated image for: *{prompt}*"
+                        "text": "*📝 Original Prompt:*\n```" + prompt + "```"
                     }
+                },
+                {
+                    "type": "divider"
                 }
             ]
             
-            # Add each image as a separate block
-            for image_url, _ in ideogram_images:
-                blocks.append({
-                    "type": "image",
-                    "title": {
-                        "type": "plain_text",
-                        "text": "Generated Image"
+            # Add each image with its enhanced prompt and download link
+            for i, (image_url, image_prompt) in enumerate(ideogram_images, 1):
+                blocks.extend([
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*✨ Enhanced Prompt for Image {i}:*\n```{image_prompt}```"
+                        }
                     },
-                    "image_url": image_url,
-                    "alt_text": "AI generated image"
-                })
+                    {
+                        "type": "image",
+                        "title": {
+                            "type": "plain_text",
+                            "text": f"Generated Image {i}"
+                        },
+                        "image_url": image_url,
+                        "alt_text": f"AI generated image {i}"
+                    },
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": f"🔗 <{image_url}|Click to download>"
+                            }
+                        ]
+                    }
+                ])
+                
+                # Only add divider if it's not the last image
+                if i < len(ideogram_images):
+                    blocks.append({
+                        "type": "divider"
+                    })
             
-            # Add a download link section
-            download_links = "\n".join([f"<{url}|Download Image>" for url, _ in ideogram_images])
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": download_links
-                }
-            })
-            
-            # Post the image back to Slack
-            response = respond({
+            # Set response visibility based on channel
+            response_payload = {
                 "blocks": blocks,
-                "unfurl_links": False  # Prevent link previews
-            })
-            logger.debug(f"Slack response: {response}")
-        else:
-            logger.error("Failed to generate images")
-            respond("Sorry, I couldn't generate images. Please try again.")
+                "unfurl_links": False,
+                "unfurl_media": False,
+                "parse": "none",
+                "response_type": "in_channel" if is_public else "ephemeral",
+                "replace_original": True
+            }
             
+            # Update the initial response with the complete message
+            respond(response_payload)
+            
+        else:
+            error_msg = "Sorry, I couldn't generate the images. Please try again."
+            logger.error(error_msg)
+            respond({
+                "text": error_msg,
+                "replace_original": True
+            })
+            
+    except KeyError as e:
+        error_msg = "Missing required environment variable: PUBLIC_CHANNEL_ID"
+        logger.error(error_msg)
+        respond({
+            "text": "Configuration error. Please contact the administrator.",
+            "replace_original": True
+        })
     except Exception as e:
-        logger.error(f"Error in command handler: {str(e)}")
-        respond(f"Error: {str(e)}")
+        error_msg = f"Error processing command: {str(e)}"
+        logger.error(error_msg)
+        respond({
+            "text": "An error occurred while processing your request. Please try again.",
+            "replace_original": True
+        })
 
 def generate_ideogram_image(prompt, num_images=5):
     """
@@ -120,6 +206,7 @@ def generate_ideogram_image(prompt, num_images=5):
     """
     logger.info(f"Attempting to generate {num_images} images with prompt: {prompt}")
     
+    # Check if we have the API key
     api_key = os.environ.get("IDEOGRAM_API_KEY")
     if not api_key:
         logger.error("IDEOGRAM_API_KEY is not set in environment variables")
@@ -142,14 +229,14 @@ def generate_ideogram_image(prompt, num_images=5):
     
     try:
         logger.info(f"Making request to Ideogram API for {num_images} images...")
-        logger.debug(f"Request headers (excluding auth): Content-Type: {headers['Content-Type']}")
         logger.debug(f"Request data: {data}")
         
+        # Make request with timeout
         response = requests.post(
             'https://api.ideogram.ai/generate',
             headers=headers,
             json=data,
-            timeout=20  # Set a timeout of 20 seconds
+            timeout=30  # 30 second timeout
         )
         
         logger.info(f"Received response from Ideogram API. Status code: {response.status_code}")
@@ -180,6 +267,9 @@ def generate_ideogram_image(prompt, num_images=5):
             logger.debug(f"Full response: {response_json}")
             return None
         
+    except requests.exceptions.Timeout:
+        logger.error("Request timed out while generating images")
+        return None
     except requests.exceptions.RequestException as e:
         logger.error(f"Request error: {str(e)}")
         return None
