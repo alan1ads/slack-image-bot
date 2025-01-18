@@ -43,46 +43,63 @@ def handle_generate_command(ack, respond, command):
     # Acknowledge command received
     ack()
     
-    # Get the prompt from the command
-    prompt = command['text']
+    # Parse command text for prompt and number of images
+    command_text = command['text']
+    parts = command_text.split('--n')
+    
+    prompt = parts[0].strip()
+    num_images = 4  # default to 4 images
+    
+    if len(parts) > 1:
+        try:
+            requested_num = int(parts[1].strip())
+            num_images = min(max(1, requested_num), 4)  # still limit between 1 and 4 images
+        except ValueError:
+            num_images = 4  # keep default of 4 if invalid input
     
     # Tell user we're working on it
     respond(f"Working on generating images for: '{prompt}'...")
     
     try:
-        # Generate image with Ideogram
-        ideogram_image = generate_ideogram_image(prompt)
+        # Generate images with Ideogram
+        ideogram_images = generate_ideogram_image(prompt, num_images)
         
-        if ideogram_image:
-            logger.info("Successfully generated image")
-            # Post the image back to Slack with a direct download link
-            respond({
-                "blocks": [
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"Here's your generated image for: *{prompt}*"
-                        }
-                    },
+        if ideogram_images:
+            logger.info(f"Successfully generated {len(ideogram_images)} images")
+            
+            # Create blocks for Slack message
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"Here are your {len(ideogram_images)} generated images for: *{prompt}*"
+                    }
+                }
+            ]
+            
+            # Add each image and its download link
+            for i, image_url in enumerate(ideogram_images, 1):
+                blocks.extend([
                     {
                         "type": "image",
                         "title": {
                             "type": "plain_text",
-                            "text": "Generated Image"
+                            "text": f"Generated Image {i}"
                         },
-                        "image_url": ideogram_image,
-                        "alt_text": "AI generated image"
+                        "image_url": image_url,
+                        "alt_text": f"AI generated image {i}"
                     },
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"<{ideogram_image}|Download Image>"
+                            "text": f"<{image_url}|Download Image {i}>"
                         }
                     }
-                ]
-            })
+                ])
+            
+            respond({"blocks": blocks})
         else:
             logger.error("Failed to generate image")
             respond("Sorry, I couldn't generate an image. Please try again.")
@@ -91,9 +108,16 @@ def handle_generate_command(ack, respond, command):
         logger.error(f"Error in command handler: {str(e)}")
         respond(f"Error: {str(e)}")
 
-def generate_ideogram_image(prompt):
+def generate_ideogram_image(prompt, num_images=4):
     """
-    Generate an image using Ideogram API
+    Generate images using Ideogram API
+    
+    Args:
+        prompt (str): The prompt for image generation
+        num_images (int): Number of images to generate (default: 4)
+    
+    Returns:
+        list: List of image URLs
     """
     logger.info(f"Attempting to generate image with prompt: {prompt}")
     
@@ -114,7 +138,8 @@ def generate_ideogram_image(prompt):
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
             'magic_prompt_option': 'AUTO'
-        }
+        },
+        'num_images': num_images
     }
     
     try:
@@ -140,9 +165,9 @@ def generate_ideogram_image(prompt):
         
         # Check if 'data' key exists and contains image information
         if 'data' in response_json and response_json['data']:
-            image_url = response_json['data'][0]['url']
-            logger.info("Successfully extracted image URL from response")
-            return image_url
+            image_urls = [image['url'] for image in response_json['data']]
+            logger.info(f"Successfully extracted {len(image_urls)} image URLs from response")
+            return image_urls
         else:
             logger.error("No image data found in response")
             logger.debug(f"Full response: {response_json}")
