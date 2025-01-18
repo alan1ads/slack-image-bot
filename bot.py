@@ -145,7 +145,7 @@ def handle_generate_command(ack, respond, command):
                         "elements": [
                             {
                                 "type": "mrkdwn",
-                                "text": f"🔗 <{image_url}|Click to download>"
+                                "text": f"<{image_url}|🔗 Download Image {i}>"
                             }
                         ]
                     }
@@ -160,9 +160,8 @@ def handle_generate_command(ack, respond, command):
             # Set response visibility based on channel
             response_payload = {
                 "blocks": blocks,
-                "unfurl_links": False,
-                "unfurl_media": False,
-                "parse": "none",
+                "unfurl_links": False,  # Disable link previews
+                "unfurl_media": False,  # Disable media previews
                 "response_type": "in_channel" if is_public else "ephemeral",
                 "replace_original": True
             }
@@ -231,12 +230,12 @@ def generate_ideogram_image(prompt, num_images=5):
         logger.info(f"Making request to Ideogram API for {num_images} images...")
         logger.debug(f"Request data: {data}")
         
-        # Make request with timeout
+        # Make request with 60-second timeout
         response = requests.post(
             'https://api.ideogram.ai/generate',
             headers=headers,
             json=data,
-            timeout=30  # 30 second timeout
+            timeout=60  # 60 seconds timeout
         )
         
         logger.info(f"Received response from Ideogram API. Status code: {response.status_code}")
