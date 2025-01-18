@@ -53,12 +53,12 @@ def handle_generate_command(ack, respond, command):
     if len(parts) > 1:
         try:
             requested_num = int(parts[1].strip())
-            num_images = min(max(1, requested_num), 4)  # still limit between 1 and 4 images
+            num_images = min(max(1, requested_num), 4)  # limit between 1 and 4 images
         except ValueError:
             num_images = 4  # keep default of 4 if invalid input
     
     # Tell user we're working on it
-    respond(f"Working on generating images for: '{prompt}'...")
+    respond(f"Working on generating {num_images} images for: '{prompt}'...")
     
     try:
         # Generate images with Ideogram
@@ -101,8 +101,8 @@ def handle_generate_command(ack, respond, command):
             
             respond({"blocks": blocks})
         else:
-            logger.error("Failed to generate image")
-            respond("Sorry, I couldn't generate an image. Please try again.")
+            logger.error("Failed to generate images")
+            respond("Sorry, I couldn't generate the images. Please try again.")
             
     except Exception as e:
         logger.error(f"Error in command handler: {str(e)}")
@@ -119,7 +119,7 @@ def generate_ideogram_image(prompt, num_images=4):
     Returns:
         list: List of image URLs
     """
-    logger.info(f"Attempting to generate image with prompt: {prompt}")
+    logger.info(f"Attempting to generate {num_images} images with prompt: {prompt}")
     
     # Check if we have the API key
     api_key = os.environ.get("IDEOGRAM_API_KEY")
@@ -137,13 +137,13 @@ def generate_ideogram_image(prompt, num_images=4):
             'prompt': prompt,
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
-            'magic_prompt_option': 'AUTO'
-        },
-        'num_images': num_images
+            'magic_prompt_option': 'AUTO',
+            'num_images': num_images  # Include num_images in the image_request
+        }
     }
     
     try:
-        logger.info("Making request to Ideogram API...")
+        logger.info(f"Making request to Ideogram API for {num_images} images...")
         logger.debug(f"Request headers (excluding auth): Content-Type: {headers['Content-Type']}")
         logger.debug(f"Request data: {data}")
         
@@ -161,12 +161,17 @@ def generate_ideogram_image(prompt, num_images=4):
             return None
             
         response_json = response.json()
-        logger.debug(f"Response JSON structure: {list(response_json.keys())}")
+        logger.debug(f"Full API Response: {response_json}")
         
-        # Check if 'data' key exists and contains image information
         if 'data' in response_json and response_json['data']:
-            image_urls = [image['url'] for image in response_json['data']]
+            image_urls = []
+            for image_data in response_json['data']:
+                if 'url' in image_data:
+                    image_urls.append(image_data['url'])
+            
             logger.info(f"Successfully extracted {len(image_urls)} image URLs from response")
+            if len(image_urls) < num_images:
+                logger.warning(f"Requested {num_images} images but only received {len(image_urls)}")
             return image_urls
         else:
             logger.error("No image data found in response")
