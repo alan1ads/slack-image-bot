@@ -8,6 +8,7 @@ import logging
 import threading
 import json
 from flask import Flask, jsonify
+import functools
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -220,7 +221,11 @@ def generate_ideogram_image(prompt, num_images=5):
         logger.debug(f"Request headers (excluding auth): Content-Type: {headers['Content-Type']}")
         logger.debug(f"Request data: {data}")
         
-        response = requests.post(
+        # Create a session with custom timeout settings
+        session = requests.Session()
+        session.request = functools.partial(session.request, timeout=None)  # Disable timeout
+        
+        response = session.post(
             'https://api.ideogram.ai/generate',
             headers=headers,
             json=data
