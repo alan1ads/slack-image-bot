@@ -66,7 +66,8 @@ def handle_generate_command(ack, respond, command):
         result = generate_ideogram_image(prompt, num_images)
         
         if result:
-            ideogram_images, enhanced_prompt = result
+            # result is now a list of tuples (url, prompt)
+            ideogram_images = result
             logger.info(f"Successfully generated {len(ideogram_images)} images")
             
             # Create blocks for Slack message with both prompts
@@ -140,7 +141,7 @@ def generate_ideogram_image(prompt, num_images=5):
         num_images (int): Number of images to generate (default: 5)
     
     Returns:
-        tuple: (list of image URLs, enhanced prompt if available)
+        list: List of tuples containing (image_url, enhanced_prompt)
     """
     logger.info(f"Attempting to generate {num_images} images with prompt: {prompt}")
     
@@ -160,9 +161,8 @@ def generate_ideogram_image(prompt, num_images=5):
             'prompt': prompt,
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
-            'magic_prompt': 'AUTO',  # Changed from magic_prompt_option
-            'num_images': num_images,  # Keep using num_images
-            'upscale': True
+            'magic_prompt': 'AUTO',
+            'num_images': num_images
         }
     }
     
@@ -177,65 +177,30 @@ def generate_ideogram_image(prompt, num_images=5):
             json=data
         )
         
-        logger.info("=== IDEOGRAM API RESPONSE ===")
-        logger.info(f"Status Code: {response.status_code}")
-        response_json = response.json()
-        logger.info("Response Content:")
-        logger.info(json.dumps(response_json, indent=2))
-        logger.info("===========================")
+        logger.info(f"Received response from Ideogram API. Status code: {response.status_code}")
         
         if response.status_code != 200:
             logger.error(f"Ideogram API error. Status code: {response.status_code}")
             logger.error(f"Response content: {response.text}")
             return None
             
-        # Get the response content and check each possible location for the magic prompt
         response_json = response.json()
-        enhanced_prompt = None
-        
-        logger.info("Checking for magic prompt in response...")
-        
-        # Check all possible locations in order of likelihood
-        possible_locations = [
-            ('image_request', 'enhanced_prompt'),
-            ('image_request', 'magic_prompt'),
-            ('image_request', 'generated_prompt'),
-            ('generated_prompt',),
-            ('magic_prompt',),
-            ('enhanced_prompt',),
-            ('prompt',)
-        ]
-        
-        for path in possible_locations:
-            current = response_json
-            found = True
-            for key in path:
-                if key in current:
-                    current = current[key]
-                else:
-                    found = False
-                    break
-            if found and isinstance(current, str) and current != prompt:
-                enhanced_prompt = current
-                logger.info(f"Found magic prompt at path {'.'.join(path)}: {enhanced_prompt}")
-                break
-                
-        if not enhanced_prompt:
-            logger.info("No magic prompt found in any known location")
-            enhanced_prompt = "_Auto-enhancement active, but enhanced prompt not visible in API response_"
+        logger.info("=== IDEOGRAM API RESPONSE ===")
+        logger.info(json.dumps(response_json, indent=2))
+        logger.info("===========================")
         
         if 'data' in response_json and response_json['data']:
-            image_urls = []
-            for image_data in response_json['data']:
-                if 'url' in image_data:
-                    image_urls.append(image_data['url'])
+            image_data = []
+            for image_info in response_json['data']:
+                if 'url' in image_info and 'prompt' in image_info:
+                    image_data.append((image_info['url'], image_info['prompt']))
             
-            logger.info(f"Successfully extracted {len(image_urls)} image URLs from response")
-            if len(image_urls) < num_images:
-                logger.warning(f"Requested {num_images} images but only received {len(image_urls)}")
+            logger.info(f"Successfully extracted {len(image_data)} images with their enhanced prompts")
+            if len(image_data) < num_images:
+                logger.warning(f"Requested {num_images} images but only received {len(image_data)}")
             
-            # Return both image URLs and enhanced prompt
-            return image_urls, enhanced_prompt if enhanced_prompt else None
+            # Return list of tuples containing (url, enhanced_prompt)
+            return image_data
         else:
             logger.error("No image data found in response")
             logger.debug(f"Full response: {response_json}")
