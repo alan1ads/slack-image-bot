@@ -161,7 +161,8 @@ def generate_ideogram_image(prompt, num_images=5):
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
             'magic_prompt_option': 'AUTO',
-            'num_images': num_images
+            'num_images': num_images,
+            'return_magic_prompt': True  # Add this to request the magic prompt
         }
     }
     
@@ -190,19 +191,22 @@ def generate_ideogram_image(prompt, num_images=5):
         if 'image_request' in response_json:
             logger.info(f"image_request keys: {list(response_json['image_request'].keys())}")
         
-        # Store the enhanced prompt if available
+        # Check for enhanced prompt in various possible locations
         enhanced_prompt = None
-        
-        # Check for enhanced prompt in image_request
-        if ('image_request' in response_json and 
-            'enhanced_prompt' in response_json['image_request']):
-            enhanced_prompt = response_json['image_request']['enhanced_prompt']
-            logger.info(f"Enhanced prompt found in image_request: {enhanced_prompt}")
-        # Also check at root level
+        if 'magic_prompt' in response_json:
+            enhanced_prompt = response_json['magic_prompt']
+        elif 'image_request' in response_json and 'magic_prompt' in response_json['image_request']:
+            enhanced_prompt = response_json['image_request']['magic_prompt']
         elif 'enhanced_prompt' in response_json:
             enhanced_prompt = response_json['enhanced_prompt']
-            logger.info(f"Enhanced prompt found at root level: {enhanced_prompt}")
-        
+        elif 'image_request' in response_json and 'enhanced_prompt' in response_json['image_request']:
+            enhanced_prompt = response_json['image_request']['enhanced_prompt']
+            
+        if enhanced_prompt:
+            logger.info(f"Found magic prompt: {enhanced_prompt}")
+        else:
+            logger.info("No magic prompt found in the response")
+            enhanced_prompt = "Magic prompt not available for this generation"  # Fallback message        
         if 'data' in response_json and response_json['data']:
             image_urls = []
             for image_data in response_json['data']:
