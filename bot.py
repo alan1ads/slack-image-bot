@@ -120,14 +120,13 @@ def generate_ideogram_image(prompt, num_images=5):
     """
     logger.info(f"Attempting to generate {num_images} images with prompt: {prompt}")
     
-    # Check if we have the API key
     api_key = os.environ.get("IDEOGRAM_API_KEY")
     if not api_key:
         logger.error("IDEOGRAM_API_KEY is not set in environment variables")
         return None
         
     headers = {
-        'Api-Key': os.environ.get("IDEOGRAM_API_KEY"),
+        'Api-Key': api_key,
         'Content-Type': 'application/json'
     }
     
@@ -149,7 +148,8 @@ def generate_ideogram_image(prompt, num_images=5):
         response = requests.post(
             'https://api.ideogram.ai/generate',
             headers=headers,
-            json=data
+            json=data,
+            timeout=20  # Set a timeout of 20 seconds
         )
         
         logger.info(f"Received response from Ideogram API. Status code: {response.status_code}")
@@ -174,7 +174,6 @@ def generate_ideogram_image(prompt, num_images=5):
             if len(image_data) < num_images:
                 logger.warning(f"Requested {num_images} images but only received {len(image_data)}")
             
-            # Return list of tuples containing (url, enhanced_prompt)
             return image_data
         else:
             logger.error("No image data found in response")
