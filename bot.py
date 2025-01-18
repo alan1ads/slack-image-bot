@@ -74,7 +74,14 @@ def handle_generate_command(ack, respond, command):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"Here are your {len(ideogram_images)} generated images for:\n*Original prompt:* {prompt}"
+                        "text": f"🎨 *Generated {len(ideogram_images)} images with:*"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"📝 *Original Prompt:*\n{prompt}"
                     }
                 }
             ]
@@ -85,9 +92,14 @@ def handle_generate_command(ack, respond, command):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*Enhanced prompt:* {enhanced_prompt}"
+                        "text": f"✨ *Ideogram's Magic Prompt:*\n{enhanced_prompt}"
                     }
                 })
+            
+            # Add divider before images
+            blocks.append({
+                "type": "divider"
+            })
             
             # Add each image and its download link
             for i, image_url in enumerate(ideogram_images, 1):
@@ -105,7 +117,7 @@ def handle_generate_command(ack, respond, command):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"<{image_url}|Download Image {i}>"
+                            "text": f"<{image_url}|📥 Download Image {i}>"
                         }
                     }
                 ])
@@ -165,20 +177,31 @@ def generate_ideogram_image(prompt, num_images=5):
         )
         
         logger.info(f"Received response from Ideogram API. Status code: {response.status_code}")
+        logger.info("Full API response structure:")
         
         if response.status_code != 200:
             logger.error(f"Ideogram API error. Status code: {response.status_code}")
             logger.error(f"Response content: {response.text}")
             return None
             
+        # Parse and log response structure
+        response_json = response.json()
+        logger.info(f"Response keys: {list(response_json.keys())}")
+        if 'image_request' in response_json:
+            logger.info(f"image_request keys: {list(response_json['image_request'].keys())}")
+        
         # Store the enhanced prompt if available
         enhanced_prompt = None
-        response_json = response.json()
-        logger.debug(f"Full API Response: {response_json}")
         
-        if 'enhanced_prompt' in response_json:
+        # Check for enhanced prompt in image_request
+        if ('image_request' in response_json and 
+            'enhanced_prompt' in response_json['image_request']):
+            enhanced_prompt = response_json['image_request']['enhanced_prompt']
+            logger.info(f"Enhanced prompt found in image_request: {enhanced_prompt}")
+        # Also check at root level
+        elif 'enhanced_prompt' in response_json:
             enhanced_prompt = response_json['enhanced_prompt']
-            logger.info(f"Enhanced prompt: {enhanced_prompt}")
+            logger.info(f"Enhanced prompt found at root level: {enhanced_prompt}")
         
         if 'data' in response_json and response_json['data']:
             image_urls = []
