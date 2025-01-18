@@ -159,13 +159,22 @@ def handle_generate_command(ack, respond, command):
                     }
                 ])
             
-            # Use visibility controller to handle the response
-            visibility_controller.respond_with_visibility(
-                respond=respond,
-                blocks=blocks,
-                channel_id=command['channel_id'],
-                user_id=command['user_id']
-            )
+            # Check if we're in the public channel
+            is_public = command['channel_id'] == os.environ.get("PUBLIC_CHANNEL_ID")
+            logger.info(f"Channel ID: {command['channel_id']}")
+            logger.info(f"Public Channel ID: {os.environ.get('PUBLIC_CHANNEL_ID')}")
+            logger.info(f"Is public channel: {is_public}")
+            
+            # Send response with appropriate visibility
+            if is_public:
+                respond({
+                    "blocks": blocks,
+                    "response_type": "in_channel"
+                })
+            else:
+                respond({
+                    "blocks": blocks
+                })
         else:
             logger.error("Failed to generate images")
             respond({
