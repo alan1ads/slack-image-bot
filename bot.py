@@ -188,28 +188,23 @@ def generate_ideogram_image(prompt, num_images=5):
             
         # Get the response content and check each possible location for the magic prompt
         response_json = response.json()
-        enhanced_prompt = None
+        enhanced_prompts = []
         
-        logger.info("Checking for magic prompt in response...")
+        logger.info("Checking for magic prompts in response...")
         
-        # First check if the prompt is in the main response
-        if 'magic_prompt' in response_json:
-            enhanced_prompt = response_json['magic_prompt']
-        # Then check in the data array
-        elif 'data' in response_json and response_json['data']:
-            first_image = response_json['data'][0]
-            if 'magic_prompt' in first_image:
-                enhanced_prompt = first_image['magic_prompt']
-            elif 'enhanced_prompt' in first_image:
-                enhanced_prompt = first_image['enhanced_prompt']
-            elif 'prompt' in first_image:
-                enhanced_prompt = first_image['prompt']
+        # Collect all unique prompts from the data array
+        if 'data' in response_json and response_json['data']:
+            for image_data in response_json['data']:
+                if 'prompt' in image_data:
+                    if image_data['prompt'] not in enhanced_prompts:
+                        enhanced_prompts.append(image_data['prompt'])
         
-        if not enhanced_prompt:
-            logger.info("No magic prompt found in response")
-            enhanced_prompt = "_Auto-enhancement active, but enhanced prompt not visible in API response_"
+        if not enhanced_prompts:
+            logger.info("No magic prompts found in response")
+            enhanced_prompt_text = "_Auto-enhancement active, but enhanced prompt not visible in API response_"
         else:
-            logger.info(f"Found magic prompt: {enhanced_prompt}")
+            logger.info(f"Found {len(enhanced_prompts)} magic prompts")
+            enhanced_prompt_text = "\n\n".join([f"Image {i+1}:\n{prompt}" for i, prompt in enumerate(enhanced_prompts)])
         
         if 'data' in response_json and response_json['data']:
             image_urls = []
@@ -221,8 +216,8 @@ def generate_ideogram_image(prompt, num_images=5):
             if len(image_urls) < num_images:
                 logger.warning(f"Requested {num_images} images but only received {len(image_urls)}")
             
-            # Return both image URLs and enhanced prompt
-            return image_urls, enhanced_prompt if enhanced_prompt else None
+            # Return both image URLs and enhanced prompts
+            return image_urls, enhanced_prompt_text
         else:
             logger.error("No image data found in response")
             logger.debug(f"Full response: {response_json}")
