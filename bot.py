@@ -193,19 +193,8 @@ def handle_generate_command(ack, respond, command):
         })
 
 def generate_ideogram_image(prompt, num_images=5):
-    """
-    Generate images using Ideogram API
-    
-    Args:
-        prompt (str): The prompt for image generation
-        num_images (int): Number of images to generate (default: 5)
-    
-    Returns:
-        list: List of tuples containing (image_url, enhanced_prompt)
-    """
     logger.info(f"Attempting to generate {num_images} images with prompt: {prompt}")
     
-    # Check if we have the API key
     api_key = os.environ.get("IDEOGRAM_API_KEY")
     if not api_key:
         logger.error("IDEOGRAM_API_KEY is not set in environment variables")
@@ -228,14 +217,14 @@ def generate_ideogram_image(prompt, num_images=5):
     
     try:
         logger.info(f"Making request to Ideogram API for {num_images} images...")
+        logger.debug(f"Request headers (excluding auth): Content-Type: {headers['Content-Type']}")
         logger.debug(f"Request data: {data}")
         
-        # Make request with 60-second timeout
         response = requests.post(
             'https://api.ideogram.ai/generate',
             headers=headers,
             json=data,
-            timeout=60  # 60 seconds timeout
+            timeout=10  # Set a timeout of 10 seconds
         )
         
         logger.info(f"Received response from Ideogram API. Status code: {response.status_code}")
@@ -266,9 +255,6 @@ def generate_ideogram_image(prompt, num_images=5):
             logger.debug(f"Full response: {response_json}")
             return None
         
-    except requests.exceptions.Timeout:
-        logger.error("Request timed out while generating images")
-        return None
     except requests.exceptions.RequestException as e:
         logger.error(f"Request error: {str(e)}")
         return None
