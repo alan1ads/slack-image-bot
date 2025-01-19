@@ -63,52 +63,55 @@ def poll_midjourney_result(hash_id, api_key, max_attempts=60, delay=10):
     status_url = f'{base_url}/midjourney/v2/status?hash={hash_id}'
     
     logger.info(f"Starting to poll for results with hash: {hash_id}")
-    logger.debug(f"Using status URL: {status_url}")
     
     for attempt in range(max_attempts):
         try:
-            logger.info(f"Checking progress: Attempt {attempt + 1}/{max_attempts}")
-            
             status_response = requests.get(status_url, headers=headers)
+            status_data = status_response.json() if status_response.status_code == 200 else None
             
-            logger.info(f"Status response status: {status_response.status_code}")
-            logger.debug(f"Status response content: {status_response.text}")
-            
-            if status_response.status_code == 200:
-                status_data = status_response.json()
+            if not status_data:
+                logger.error(f"Failed to get status. Status code: {status_response.status_code}")
+                time.sleep(delay)
+                continue
                 
-                if status_data.get('status') == 'done':
-                    if 'result' in status_data and status_data['result']:
-                        result = status_data['result']
-                        return {
-                            'url': result.get('url'),
-                            'proxy_url': result.get('proxy_url'),
-                            'enhanced_prompt': status_data.get('prompt'),
-                            'type': status_data.get('type'),
-                            'choice': status_data.get('choice')
-                        }
+            status = status_data.get('status')
+            progress = status_data.get('progress', 0)
+            
+            logger.info(f"Status: {status}, Progress: {progress}%")
+            
+            if status == 'done':
+                result = status_data.get('result', {})
+                if result and result.get('url'):
+                    return {
+                        'url': result['url'],
+                        'proxy_url': result.get('proxy_url'),
+                        'enhanced_prompt': status_data.get('prompt'),
+                        'type': status_data.get('type')
+                    }
                     
-                elif status_data.get('status') == 'failed':
-                    logger.error(f"Midjourney generation failed: {status_data.get('status_reason')}")
-                    return None
+            elif status == 'failed':
+                logger.error(f"Generation failed: {status_data.get('status_reason')}")
+                return None
                 
-                logger.info(f"Generation in progress: {status_data.get('progress', 0)}%")
+            elif status in ['queued', 'progress']:
+                logger.info(f"Generation in progress: {progress}%")
+                time.sleep(delay)
+                continue
+                
             else:
-                logger.warning(f"Failed to get status. Status: {status_response.status_code}")
-            
-            time.sleep(delay)
-            
+                logger.warning(f"Unknown status: {status}")
+                time.sleep(delay)
+                
         except Exception as e:
             logger.error(f"Error polling result: {str(e)}")
             time.sleep(delay)
-            continue
     
-    logger.error("Timeout waiting for Midjourney result")
+    logger.error("Timeout waiting for result")
     return None
 
-def upscale_midjourney_image(hash_id, choice, api_key):
+def upscale_midjourney_image(hash_id, choice, api_key, max_attempts=3):
     """
-    Upscale a specific image variation from Midjourney
+    Upscale a specific image variation from Midjourney with retries
     """
     logger.info(f"Attempting to upscale variation {choice} from hash: {hash_id}")
     
@@ -123,29 +126,38 @@ def upscale_midjourney_image(hash_id, choice, api_key):
         'webhook_type': 'result'
     }
     
-    try:
-        upscale_response = requests.post(
-            'https://api.userapi.ai/midjourney/v2/upscale',
-            headers=headers,
-            json=data
-        )
-        
-        logger.info(f"Upscale response status: {upscale_response.status_code}")
-        logger.debug(f"Upscale response content: {upscale_response.text}")
-        
-        if upscale_response.status_code == 200:
+    for attempt in range(max_attempts):
+        try:
+            upscale_response = requests.post(
+                'https://api.userapi.ai/midjourney/v2/upscale',
+                headers=headers,
+                json=data
+            )
+            
+            if upscale_response.status_code != 200:
+                logger.error(f"Upscale request failed: {upscale_response.status_code}")
+                time.sleep(5)
+                continue
+                
             upscale_data = upscale_response.json()
-            if 'hash' in upscale_data:
-                upscale_result = poll_midjourney_result(upscale_data['hash'], api_key)
-                if upscale_result and 'url' in upscale_result:
-                    return upscale_result
-        
-        logger.error("Failed to upscale image")
-        return None
-        
-    except Exception as e:
-        logger.error(f"Error during upscale: {str(e)}")
-        return None
+            if 'hash' not in upscale_data:
+                logger.error("No hash in upscale response")
+                time.sleep(5)
+                continue
+                
+            # Poll for the upscaled result
+            upscale_result = poll_midjourney_result(upscale_data['hash'], api_key)
+            if upscale_result and 'url' in upscale_result:
+                return upscale_result['url']
+                
+        except Exception as e:
+            logger.error(f"Error during upscale attempt {attempt + 1}: {str(e)}")
+            if attempt < max_attempts - 1:
+                time.sleep(5)
+                continue
+            
+    logger.error(f"Failed to upscale variation {choice} after {max_attempts} attempts")
+    return None
 
 def generate_midjourney_image(prompt):
     """
@@ -181,7 +193,7 @@ def generate_midjourney_image(prompt):
         )
         
         if response.status_code != 200:
-            logger.error(f"Failed to generate initial images. Status: {response.status_code}")
+            logger.error(f"Failed to generate initial images: {response.status_code}")
             return None
             
         response_data = response.json()
@@ -198,21 +210,25 @@ def generate_midjourney_image(prompt):
         # Store results for each upscaled image
         upscaled_results = []
         
-        # Upscale each variation
+        # Upscale each variation with delay between attempts
         for i in range(1, 5):
             logger.info(f"Processing variation {i}/4")
-            upscale_result = upscale_midjourney_image(response_data['hash'], i, api_key)
+            upscaled_url = upscale_midjourney_image(response_data['hash'], i, api_key)
             
-            if upscale_result:
+            if upscaled_url:
                 upscaled_results.append((
-                    upscale_result['url'],
-                    f"{prompt} (Upscaled variation {i})"
+                    upscaled_url,
+                    f"{prompt} (Variation {i})"
                 ))
                 logger.info(f"Successfully upscaled variation {i}")
             else:
                 logger.error(f"Failed to upscale variation {i}")
+            
+            # Add delay between upscale attempts
+            if i < 4:
+                time.sleep(5)
         
-        # Return results only if we have at least one successful upscale
+        # Return results if we have any successful upscales
         if upscaled_results:
             logger.info(f"Successfully generated {len(upscaled_results)} upscaled images")
             return upscaled_results
