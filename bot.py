@@ -50,54 +50,51 @@ except Exception as e:
     logger.error(f"Failed to initialize Slack App: {str(e)}")
     raise
 
-def poll_midjourney_result(hash_id, headers, max_attempts=60, delay=10):
+def poll_midjourney_result(hash_id, api_key, max_attempts=60, delay=10):
     """
     Poll for Midjourney result using the provided hash
     """
+    headers = {
+        'api-key': api_key,
+        'Content-Type': 'application/json'
+    }
+    
     base_url = 'https://api.userapi.ai'
-    progress_url = f'{base_url}/midjourney/v2/progress/{hash_id}'
-    result_url = f'{base_url}/midjourney/v2/result/{hash_id}'
+    status_url = f'{base_url}/midjourney/v2/status?hash={hash_id}'
     
     logger.info(f"Starting to poll for results with hash: {hash_id}")
-    logger.debug(f"Progress URL: {progress_url}")
-    
-    session = requests.Session()
-    session.request = functools.partial(session.request, timeout=None)
+    logger.debug(f"Using status URL: {status_url}")
     
     for attempt in range(max_attempts):
         try:
             logger.info(f"Checking progress: Attempt {attempt + 1}/{max_attempts}")
             
-            progress_response = session.get(progress_url, headers=headers)
-            progress_content = progress_response.text
+            status_response = requests.get(status_url, headers=headers)
             
-            logger.info(f"Progress response status: {progress_response.status_code}")
-            logger.debug(f"Progress response content: {progress_content}")
+            logger.info(f"Status response status: {status_response.status_code}")
+            logger.debug(f"Status response content: {status_response.text}")
             
-            if progress_response.status_code == 200:
-                progress_data = progress_response.json()
-                logger.debug(f"Progress data: {json.dumps(progress_data, indent=2)}")
+            if status_response.status_code == 200:
+                status_data = status_response.json()
                 
-                status = progress_data.get('status')
-                
-                if status == 'done':
-                    result_response = session.get(result_url, headers=headers)
+                if status_data.get('status') == 'done' and status_data.get('progress') == 100:
+                    if 'result' in status_data:
+                        result = status_data['result']
+                        return {
+                            'urls': [result.get('url')],
+                            'proxy_urls': [result.get('proxy_url')],
+                            'enhanced_prompt': status_data.get('prompt'),
+                            'next_actions': status_data.get('next_actions', [])
+                        }
                     
-                    if result_response.status_code == 200:
-                        result = result_response.json()
-                        logger.debug(f"Result data: {json.dumps(result, indent=2)}")
-                        return result
-                    else:
-                        logger.error(f"Failed to get result. Status: {result_response.status_code}")
-                        
-                elif status == 'failed':
-                    logger.error(f"Midjourney generation failed: {progress_data.get('error')}")
+                elif status_data.get('status') == 'failed':
+                    logger.error(f"Midjourney generation failed: {status_data.get('status_reason')}")
                     return None
-                    
-                logger.info(f"Generation in progress: {progress_data.get('progress', 0)}% (Status: {status})")
-            else:
-                logger.error(f"Failed to get progress. Status: {progress_response.status_code}")
                 
+                logger.info(f"Generation in progress: {status_data.get('progress', 0)}%")
+            else:
+                logger.warning(f"Failed to get status. Status: {status_response.status_code}")
+            
             time.sleep(delay)
             
         except Exception as e:
@@ -108,45 +105,40 @@ def poll_midjourney_result(hash_id, headers, max_attempts=60, delay=10):
     logger.error("Timeout waiting for Midjourney result")
     return None
 
-def upscale_midjourney_image(original_hash, choice, headers):
+def upscale_midjourney_image(hash_id, choice, api_key):
     """
     Upscale a specific image variation from Midjourney
     """
-    logger.info(f"Attempting to upscale variation {choice} from hash: {original_hash}")
+    logger.info(f"Attempting to upscale variation {choice} from hash: {hash_id}")
+    
+    headers = {
+        'api-key': api_key,
+        'Content-Type': 'application/json'
+    }
+    
+    data = {
+        'hash': hash_id,
+        'choice': choice,
+        'webhook_type': 'result'
+    }
     
     try:
-        upscale_url = 'https://api.userapi.ai/midjourney/v2/upscale'
-        
-        upscale_data = {
-            'hash': original_hash,
-            'choice': choice,
-            'webhook_type': 'result'
-        }
-        
-        logger.debug(f"Upscale request data: {json.dumps(upscale_data, indent=2)}")
-        
-        session = requests.Session()
-        session.request = functools.partial(session.request, timeout=None)
-        
-        upscale_response = session.post(
-            upscale_url,
+        upscale_response = requests.post(
+            'https://api.userapi.ai/midjourney/v2/upscale',
             headers=headers,
-            json=upscale_data
+            json=data
         )
         
         logger.info(f"Upscale response status: {upscale_response.status_code}")
         logger.debug(f"Upscale response content: {upscale_response.text}")
         
         if upscale_response.status_code == 200:
-            upscale_result = upscale_response.json()
-            
-            if 'hash' in upscale_result:
-                # Poll for the upscaled result
-                upscaled_data = poll_midjourney_result(upscale_result['hash'], headers)
-                
-                if upscaled_data and 'urls' in upscaled_data and upscaled_data['urls']:
-                    return upscaled_data['urls'][0]
-                    
+            upscale_data = upscale_response.json()
+            if 'hash' in upscale_data:
+                upscale_result = poll_midjourney_result(upscale_data['hash'], api_key)
+                if upscale_result and 'urls' in upscale_result:
+                    return upscale_result['urls'][0]
+        
         logger.error("Failed to upscale image")
         return None
         
@@ -154,17 +146,17 @@ def upscale_midjourney_image(original_hash, choice, headers):
         logger.error(f"Error during upscale: {str(e)}")
         return None
 
-def generate_midjourney_image(prompt, variation_number=None):
+def generate_midjourney_image(prompt):
     """
-    Generate Midjourney images with optional variation number for single image generation
+    Generate Midjourney images with automatic upscaling for each variation
     """
-    logger.info(f"Generating Midjourney image(s) for prompt: {prompt}")
+    logger.info(f"Generating Midjourney image for prompt: {prompt}")
     
     api_key = os.getenv("MIDJOURNEY_API_KEY")
     if not api_key:
         logger.error("MIDJOURNEY_API_KEY is not set")
         return None
-        
+    
     headers = {
         'api-key': api_key,
         'Content-Type': 'application/json'
@@ -180,55 +172,34 @@ def generate_midjourney_image(prompt, variation_number=None):
     }
     
     try:
-        session = requests.Session()
-        session.request = functools.partial(session.request, timeout=None)
-        
-        response = session.post(
+        response = requests.post(
             'https://api.userapi.ai/midjourney/v2/imagine',
             headers=headers,
             json=data
         )
         
-        logger.info(f"Initial generation response status: {response.status_code}")
-        logger.debug(f"Initial generation response: {response.text}")
-        
         if response.status_code != 200:
-            logger.error("Failed to initiate generation")
+            logger.error(f"Failed to generate initial images. Status: {response.status_code}")
             return None
             
         response_data = response.json()
         if 'hash' not in response_data:
-            logger.error("No hash in generation response")
+            logger.error("No hash in response")
             return None
             
-        generation_hash = response_data['hash']
-        
-        # Wait for the initial generation to complete
-        initial_result = poll_midjourney_result(generation_hash, headers)
+        initial_result = poll_midjourney_result(response_data['hash'], api_key)
         if not initial_result:
             logger.error("Failed to get initial generation result")
             return None
             
-        enhanced_prompt = initial_result.get('enhanced_prompt', prompt)
-        
-        # If variation number is specified, generate and upscale only that variation
-        if variation_number is not None:
-            upscaled_url = upscale_midjourney_image(generation_hash, variation_number, headers)
-            if upscaled_url:
-                return [(upscaled_url, enhanced_prompt)]
-            elif 'urls' in initial_result and len(initial_result['urls']) >= variation_number:
-                return [(initial_result['urls'][variation_number - 1], enhanced_prompt)]
-            return None
-            
-        # Otherwise, generate and upscale all variations
         upscaled_results = []
-        for i in range(1, 5):  # Midjourney always generates 4 variations
-            upscaled_url = upscale_midjourney_image(generation_hash, i, headers)
+        for i in range(1, 5):  # Midjourney generates 4 variations
+            upscaled_url = upscale_midjourney_image(response_data['hash'], i, api_key)
             if upscaled_url:
-                upscaled_results.append((upscaled_url, enhanced_prompt))
+                upscaled_results.append((upscaled_url, f"{initial_result.get('enhanced_prompt', prompt)} (Variation {i})"))
             elif 'urls' in initial_result and len(initial_result['urls']) >= i:
-                upscaled_results.append((initial_result['urls'][i - 1], enhanced_prompt))
-                
+                upscaled_results.append((initial_result['urls'][i-1], f"{initial_result.get('enhanced_prompt', prompt)} (Original {i})"))
+        
         return upscaled_results if upscaled_results else None
         
     except Exception as e:
