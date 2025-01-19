@@ -30,6 +30,9 @@ required_env_vars = [
     'SLACK_APP_TOKEN',
     'IDEOGRAM_API_KEY',
     'MIDJOURNEY_API_KEY',
+    'MIDJOURNEY_CHANNEL_ID',
+    'MIDJOURNEY_ACCOUNT_HASH',
+    'MIDJOURNEY_TOKEN',
     'PUBLIC_CHANNEL_ID'
 ]
 
@@ -45,6 +48,9 @@ logger.info(f"SLACK_BOT_TOKEN exists: {bool(os.getenv('SLACK_BOT_TOKEN'))}")
 logger.info(f"SLACK_APP_TOKEN exists: {bool(os.getenv('SLACK_APP_TOKEN'))}")
 logger.info(f"IDEOGRAM_API_KEY exists: {bool(os.getenv('IDEOGRAM_API_KEY'))}")
 logger.info(f"MIDJOURNEY_API_KEY exists: {bool(os.getenv('MIDJOURNEY_API_KEY'))}")
+logger.info(f"MIDJOURNEY_CHANNEL_ID exists: {bool(os.getenv('MIDJOURNEY_CHANNEL_ID'))}")
+logger.info(f"MIDJOURNEY_ACCOUNT_HASH exists: {bool(os.getenv('MIDJOURNEY_ACCOUNT_HASH'))}")
+logger.info(f"MIDJOURNEY_TOKEN exists: {bool(os.getenv('MIDJOURNEY_TOKEN'))}")
 logger.info(f"PUBLIC_CHANNEL_ID exists: {bool(os.getenv('PUBLIC_CHANNEL_ID'))}")
 
 try:
@@ -68,6 +74,8 @@ def poll_midjourney_result(hash_id, headers, max_attempts=60, delay=10):
     for attempt in range(max_attempts):
         try:
             # First check progress
+            logger.info(f"Checking progress: Attempt {attempt + 1}/{max_attempts}")
+            
             progress_response = requests.get(progress_url, headers=headers)
             logger.info(f"Progress response status: {progress_response.status_code}")
             logger.debug(f"Progress response content: {progress_response.text}")
@@ -135,7 +143,10 @@ def generate_midjourney_image(prompt):
     data = {
         'prompt': prompt,
         'webhook_type': 'result',
-        'is_disable_prefilter': False
+        'is_disable_prefilter': False,
+        'channel_id': os.environ.get('MIDJOURNEY_CHANNEL_ID'),
+        'account_hash': os.environ.get('MIDJOURNEY_ACCOUNT_HASH'),
+        'token': os.environ.get('MIDJOURNEY_TOKEN')
     }
     
     try:
