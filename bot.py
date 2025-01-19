@@ -71,7 +71,7 @@ def poll_midjourney_result(hash_id, api_key, max_attempts=60, delay=10):
     }
     
     base_url = 'https://api.userapi.ai'
-    progress_url = f'{base_url}/midjourney/v2/progress/{hash_id}'
+    status_url = f'{base_url}/midjourney/v2/status?hash={hash_id}'
     
     logger.info(f"Starting to poll for results with hash: {hash_id}")
     
@@ -79,33 +79,33 @@ def poll_midjourney_result(hash_id, api_key, max_attempts=60, delay=10):
         try:
             logger.info(f"Checking progress: Attempt {attempt + 1}/{max_attempts}")
             
-            progress_response = requests.get(
-                progress_url,
+            status_response = requests.get(
+                status_url,
                 headers=headers
             )
             
-            logger.info(f"Progress response status: {progress_response.status_code}")
-            logger.debug(f"Progress response content: {progress_response.text}")
+            logger.info(f"Status response status: {status_response.status_code}")
+            logger.debug(f"Status response content: {status_response.text}")
             
-            if progress_response.status_code == 200:
-                progress_data = progress_response.json()
+            if status_response.status_code == 200:
+                status_data = status_response.json()
                 
                 # Check if the generation is complete
-                if progress_data.get('status') == 'done' and progress_data.get('progress') == 100:
-                    # Extract image URL directly from the progress response
-                    if 'result' in progress_data and 'url' in progress_data['result']:
+                if status_data.get('status') == 'done' and status_data.get('progress') == 100:
+                    # Extract image URL from the result
+                    if 'result' in status_data and 'url' in status_data['result']:
                         return {
-                            'urls': [progress_data['result']['url']],
-                            'enhanced_prompt': progress_data.get('prompt')
+                            'urls': [status_data['result']['url']],
+                            'enhanced_prompt': status_data.get('prompt')
                         }
                     
-                elif progress_data.get('status') == 'failed':
-                    logger.error(f"Midjourney generation failed: {progress_data.get('status_reason')}")
+                elif status_data.get('status') == 'failed':
+                    logger.error(f"Midjourney generation failed: {status_data.get('status_reason')}")
                     return None
                 
-                logger.info(f"Generation in progress: {progress_data.get('progress', 0)}%")
+                logger.info(f"Generation in progress: {status_data.get('progress', 0)}%")
             else:
-                logger.warning(f"Failed to get progress. Status: {progress_response.status_code}")
+                logger.warning(f"Failed to get status. Status: {status_response.status_code}")
             
             time.sleep(delay)
             
