@@ -77,14 +77,15 @@ def poll_midjourney_result(hash_id, api_key, max_attempts=60, delay=10):
             if status_response.status_code == 200:
                 status_data = status_response.json()
                 
-                if status_data.get('status') == 'done' and status_data.get('progress') == 100:
-                    if 'result' in status_data:
+                if status_data.get('status') == 'done':
+                    if 'result' in status_data and status_data['result']:
                         result = status_data['result']
                         return {
-                            'urls': [result.get('url')],
-                            'proxy_urls': [result.get('proxy_url')],
+                            'url': result.get('url'),
+                            'proxy_url': result.get('proxy_url'),
                             'enhanced_prompt': status_data.get('prompt'),
-                            'next_actions': status_data.get('next_actions', [])
+                            'type': status_data.get('type'),
+                            'choice': status_data.get('choice')
                         }
                     
                 elif status_data.get('status') == 'failed':
@@ -136,8 +137,8 @@ def upscale_midjourney_image(hash_id, choice, api_key):
             upscale_data = upscale_response.json()
             if 'hash' in upscale_data:
                 upscale_result = poll_midjourney_result(upscale_data['hash'], api_key)
-                if upscale_result and 'urls' in upscale_result:
-                    return upscale_result['urls'][0]
+                if upscale_result and 'url' in upscale_result:
+                    return upscale_result
         
         logger.error("Failed to upscale image")
         return None
@@ -172,6 +173,7 @@ def generate_midjourney_image(prompt):
     }
     
     try:
+        # Initial image generation
         response = requests.post(
             'https://api.userapi.ai/midjourney/v2/imagine',
             headers=headers,
@@ -187,20 +189,36 @@ def generate_midjourney_image(prompt):
             logger.error("No hash in response")
             return None
             
+        # Wait for initial generation to complete
         initial_result = poll_midjourney_result(response_data['hash'], api_key)
         if not initial_result:
             logger.error("Failed to get initial generation result")
             return None
             
+        # Store results for each upscaled image
         upscaled_results = []
-        for i in range(1, 5):  # Midjourney generates 4 variations
-            upscaled_url = upscale_midjourney_image(response_data['hash'], i, api_key)
-            if upscaled_url:
-                upscaled_results.append((upscaled_url, f"{initial_result.get('enhanced_prompt', prompt)} (Variation {i})"))
-            elif 'urls' in initial_result and len(initial_result['urls']) >= i:
-                upscaled_results.append((initial_result['urls'][i-1], f"{initial_result.get('enhanced_prompt', prompt)} (Original {i})"))
         
-        return upscaled_results if upscaled_results else None
+        # Upscale each variation
+        for i in range(1, 5):
+            logger.info(f"Processing variation {i}/4")
+            upscale_result = upscale_midjourney_image(response_data['hash'], i, api_key)
+            
+            if upscale_result:
+                upscaled_results.append((
+                    upscale_result['url'],
+                    f"{prompt} (Upscaled variation {i})"
+                ))
+                logger.info(f"Successfully upscaled variation {i}")
+            else:
+                logger.error(f"Failed to upscale variation {i}")
+        
+        # Return results only if we have at least one successful upscale
+        if upscaled_results:
+            logger.info(f"Successfully generated {len(upscaled_results)} upscaled images")
+            return upscaled_results
+        else:
+            logger.error("No successful upscales")
+            return None
         
     except Exception as e:
         logger.error(f"Error in generate_midjourney_image: {str(e)}")
@@ -315,52 +333,30 @@ def handle_generate_command(ack, respond, command):
         })
         return
     
-    prompt_parts = ' '.join(parts[1:]).split('--n')
-    prompt = prompt_parts[0].strip()
-    
-    if not prompt:
-        respond({
-            "text": f"Please provide a prompt for {service}.",
-            "response_type": "ephemeral"
-        })
-        return
-    
-    num_images = 5 if service == 'ideogram' else 4  # Midjourney always returns 4 variations
-    
-    if len(prompt_parts) > 1:
-        if service == 'ideogram':
-            try:
-                requested_num = int(prompt_parts[1].strip())
-                num_images = min(max(1, requested_num), 5)
-            except ValueError:
-                pass
-        else:
-            respond({
-                "text": "Note: Midjourney generates 4 variations by default. The --n parameter will be ignored.",
-                "response_type": "ephemeral"
-            })
+    prompt = ' '.join(parts[1:])
     
     try:
         # Get channel IDs
         public_channel_id = os.environ['PUBLIC_CHANNEL_ID']
         current_channel_id = command['channel_id']
         
-        # Tell user we're working on it (always ephemeral)
+        # Tell user we're working on it
         initial_response = respond({
-            "text": f"Working on generating image{'s' if num_images > 1 else ''} using {service}...",
+            "text": f"Working on generating images using {service}...",
             "response_type": "ephemeral"
         })
         
         # Generate images based on selected service
-        result = generate_midjourney_image(prompt) if service == 'midjourney' else generate_ideogram_image(prompt, num_images)
+        result = generate_midjourney_image(prompt) if service == 'midjourney' else generate_ideogram_image(prompt)
         
         if result:
+            # Create blocks for each image
             blocks = [
                 {
                     "type": "header",
                     "text": {
                         "type": "plain_text",
-                        "text": f"🎨 Generated {len(result)} image{'s' if len(result) > 1 else ''} using {service.title()}",
+                        "text": f"🎨 Generated {len(result)} images using {service.title()}",
                         "emoji": True
                     }
                 },
@@ -368,25 +364,24 @@ def handle_generate_command(ack, respond, command):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": "*📝 Original Prompt:*\n```" + prompt + "```"
+                        "text": f"*Original Prompt:*\n```{prompt}```"
                     }
-                },
-                {
-                    "type": "divider"
                 }
             ]
             
-            for i, (image_url, image_prompt) in enumerate(result, 1):
-                prompt_section = {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*✨ Enhanced Prompt for Image {i}:*\n```{image_prompt if image_prompt else 'No enhanced prompt available'}```"
-                    }
-                }
-                
+            # Add each image as a separate message block
+            for i, (image_url, enhanced_prompt) in enumerate(result, 1):
                 blocks.extend([
-                    prompt_section,
+                    {
+                        "type": "divider"
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Image {i} of {len(result)}*\n```{enhanced_prompt}```"
+                        }
+                    },
                     {
                         "type": "image",
                         "title": {
@@ -401,20 +396,16 @@ def handle_generate_command(ack, respond, command):
                         "elements": [
                             {
                                 "type": "mrkdwn",
-                                "text": f"🔗 <{image_url}|Click here to download image {i}>"
+                                "text": f"🔗 <{image_url}|Click to download image {i}>"
                             }
                         ]
                     }
                 ])
-                
-                if i < len(result):
-                    blocks.append({
-                        "type": "divider"
-                    })
             
-            # Set response visibility based on channel
+            # Send the response
             response_payload = {
                 "blocks": blocks,
+                "text": f"Generated {len(result)} images using {service.title()}",  # Fallback text
                 "unfurl_links": False,
                 "unfurl_media": False,
                 "response_type": "in_channel" if current_channel_id == public_channel_id else "ephemeral",
@@ -422,8 +413,10 @@ def handle_generate_command(ack, respond, command):
             }
             
             respond(response_payload)
+            logger.info(f"Successfully sent {len(result)} images to Slack")
+            
         else:
-            error_msg = f"Sorry, I couldn't generate the image{'s' if num_images > 1 else ''} using {service}. Please try again."
+            error_msg = f"Sorry, I couldn't generate the images using {service}. Please try again."
             logger.error(error_msg)
             respond({
                 "text": error_msg,
@@ -431,14 +424,6 @@ def handle_generate_command(ack, respond, command):
                 "replace_original": True
             })
             
-    except KeyError as e:
-        error_msg = "Configuration error: Missing required environment variable."
-        logger.error(error_msg)
-        respond({
-            "text": "An error occurred with the bot configuration. Please contact the administrator.",
-            "response_type": "ephemeral",
-            "replace_original": True
-        })
     except Exception as e:
         error_msg = f"Error: {str(e)}"
         logger.error(error_msg)
