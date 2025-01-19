@@ -67,13 +67,13 @@ def poll_midjourney_result(hash_id, api_key, max_attempts=60, delay=10):
     for attempt in range(max_attempts):
         try:
             status_response = requests.get(status_url, headers=headers)
-            status_data = status_response.json() if status_response.status_code == 200 else None
-            
-            if not status_data:
+            if status_response.status_code != 200:
                 logger.error(f"Failed to get status. Status code: {status_response.status_code}")
+                logger.error(f"Response content: {status_response.text}")
                 time.sleep(delay)
                 continue
-                
+
+            status_data = status_response.json()
             status = status_data.get('status')
             progress = status_data.get('progress', 0)
             
@@ -94,7 +94,8 @@ def poll_midjourney_result(hash_id, api_key, max_attempts=60, delay=10):
                 return None
                 
             elif status in ['queued', 'progress']:
-                logger.info(f"Generation in progress: {progress}%")
+                if attempt % 3 == 0:  # Log every third attempt to reduce noise
+                    logger.info(f"Generation in progress ({attempt + 1}/{max_attempts}): {progress}%")
                 time.sleep(delay)
                 continue
                 
@@ -109,9 +110,9 @@ def poll_midjourney_result(hash_id, api_key, max_attempts=60, delay=10):
     logger.error("Timeout waiting for result")
     return None
 
-def upscale_midjourney_image(hash_id, choice, api_key, max_attempts=3):
+def upscale_midjourney_image(hash_id, choice, api_key, max_attempts=5, poll_max_attempts=45, poll_delay=8):
     """
-    Upscale a specific image variation from Midjourney with retries
+    Upscale a specific image variation from Midjourney with improved polling
     """
     logger.info(f"Attempting to upscale variation {choice} from hash: {hash_id}")
     
@@ -128,32 +129,52 @@ def upscale_midjourney_image(hash_id, choice, api_key, max_attempts=3):
     
     for attempt in range(max_attempts):
         try:
+            logger.info(f"Upscale attempt {attempt + 1}/{max_attempts} for variation {choice}")
             upscale_response = requests.post(
                 'https://api.userapi.ai/midjourney/v2/upscale',
                 headers=headers,
-                json=data
+                json=data,
+                timeout=30  # Add timeout
             )
             
             if upscale_response.status_code != 200:
                 logger.error(f"Upscale request failed: {upscale_response.status_code}")
-                time.sleep(5)
+                logger.error(f"Response content: {upscale_response.text}")
+                if attempt < max_attempts - 1:
+                    time.sleep(10)  # Longer delay between retry attempts
                 continue
                 
             upscale_data = upscale_response.json()
             if 'hash' not in upscale_data:
                 logger.error("No hash in upscale response")
-                time.sleep(5)
+                if attempt < max_attempts - 1:
+                    time.sleep(10)
                 continue
-                
-            # Poll for the upscaled result
-            upscale_result = poll_midjourney_result(upscale_data['hash'], api_key)
+            
+            # Poll for the upscaled result with its own timeout
+            upscale_result = poll_midjourney_result(
+                upscale_data['hash'], 
+                api_key, 
+                max_attempts=poll_max_attempts, 
+                delay=poll_delay
+            )
+            
             if upscale_result and 'url' in upscale_result:
                 return upscale_result['url']
+            
+            logger.warning(f"Failed to get upscale result, attempt {attempt + 1}")
+            if attempt < max_attempts - 1:
+                time.sleep(10)
                 
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout during upscale attempt {attempt + 1}")
+            if attempt < max_attempts - 1:
+                time.sleep(10)
+                continue
         except Exception as e:
             logger.error(f"Error during upscale attempt {attempt + 1}: {str(e)}")
             if attempt < max_attempts - 1:
-                time.sleep(5)
+                time.sleep(10)
                 continue
             
     logger.error(f"Failed to upscale variation {choice} after {max_attempts} attempts")
@@ -186,22 +207,28 @@ def generate_midjourney_image(prompt):
     
     try:
         # Initial image generation
+        logger.info("Initiating Midjourney image generation...")
         response = requests.post(
             'https://api.userapi.ai/midjourney/v2/imagine',
             headers=headers,
-            json=data
+            json=data,
+            timeout=30
         )
         
         if response.status_code != 200:
             logger.error(f"Failed to generate initial images: {response.status_code}")
+            logger.error(f"Response content: {response.text}")
             return None
             
         response_data = response.json()
+        logger.info(f"Initial generation response: {json.dumps(response_data, indent=2)}")
+        
         if 'hash' not in response_data:
             logger.error("No hash in response")
             return None
             
         # Wait for initial generation to complete
+        logger.info("Waiting for initial generation to complete...")
         initial_result = poll_midjourney_result(response_data['hash'], api_key)
         if not initial_result:
             logger.error("Failed to get initial generation result")
@@ -209,11 +236,24 @@ def generate_midjourney_image(prompt):
             
         # Store results for each upscaled image
         upscaled_results = []
+        total_variations = 4
         
-        # Upscale each variation with delay between attempts
-        for i in range(1, 5):
-            logger.info(f"Processing variation {i}/4")
-            upscaled_url = upscale_midjourney_image(response_data['hash'], i, api_key)
+        # Upscale each variation with improved error handling and delays
+        for i in range(1, total_variations + 1):
+            logger.info(f"=== Processing variation {i}/{total_variations} ===")
+            
+            # Add delay between upscale attempts to avoid rate limiting
+            if i > 1:
+                time.sleep(15)  # Increased delay between variations
+            
+            upscaled_url = upscale_midjourney_image(
+                response_data['hash'],
+                i,
+                api_key,
+                max_attempts=5,  # Increased max attempts
+                poll_max_attempts=45,  # Longer polling for upscale
+                poll_delay=8  # Adjusted poll delay
+            )
             
             if upscaled_url:
                 upscaled_results.append((
@@ -222,11 +262,7 @@ def generate_midjourney_image(prompt):
                 ))
                 logger.info(f"Successfully upscaled variation {i}")
             else:
-                logger.error(f"Failed to upscale variation {i}")
-            
-            # Add delay between upscale attempts
-            if i < 4:
-                time.sleep(5)
+                logger.warning(f"Failed to upscale variation {i}, continuing with next variation")
         
         # Return results if we have any successful upscales
         if upscaled_results:
@@ -356,9 +392,12 @@ def handle_generate_command(ack, respond, command):
         public_channel_id = os.environ['PUBLIC_CHANNEL_ID']
         current_channel_id = command['channel_id']
         
+        # Determine if this is the public channel
+        is_public_channel = current_channel_id == public_channel_id
+        
         # Tell user we're working on it
         initial_response = respond({
-            "text": f"Working on generating images using {service}...",
+            "text": f"Working on generating images using {service}...\nThis might take a few minutes, especially for Midjourney with upscaling.",
             "response_type": "ephemeral"
         })
         
@@ -418,15 +457,18 @@ def handle_generate_command(ack, respond, command):
                     }
                 ])
             
-            # Send the response
+            # Send the response with appropriate visibility
             response_payload = {
                 "blocks": blocks,
                 "text": f"Generated {len(result)} images using {service.title()}",  # Fallback text
                 "unfurl_links": False,
                 "unfurl_media": False,
-                "response_type": "in_channel" if current_channel_id == public_channel_id else "ephemeral",
+                "response_type": "in_channel" if is_public_channel else "ephemeral",
                 "replace_original": True
             }
+            
+            # Log channel information
+            logger.info(f"Sending response - Channel ID: {current_channel_id}, Public Channel: {public_channel_id}, Is Public: {is_public_channel}")
             
             respond(response_payload)
             logger.info(f"Successfully sent {len(result)} images to Slack")
