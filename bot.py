@@ -146,14 +146,15 @@ def generate_midjourney_image(prompt):
         logger.info("Making request to Midjourney API...")
         logger.debug(f"Request data: {data}")
         
-        session = requests.Session()
-        session.request = functools.partial(session.request, timeout=None)
-        
-        response = session.post(
+        response = requests.post(
             'https://api.userapi.ai/midjourney/v2/imagine',
             headers=headers,
             json=data
         )
+        
+        # Add these debug lines
+        logger.info(f"Initial response status code: {response.status_code}")
+        logger.info(f"Initial response content: {response.text}")
         
         logger.info(f"Received response from Midjourney API. Status code: {response.status_code}")
         
