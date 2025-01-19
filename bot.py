@@ -94,16 +94,9 @@ def poll_midjourney_result(hash_id, headers, max_attempts=60, delay=10):
                     if result_response.status_code == 200:
                         result = result_response.json()
                         if result.get('urls') and len(result['urls']) > 0:
-                            # Try to find enhanced prompt in various possible locations
-                            enhanced_prompt = (
-                                result.get('enhanced_prompt') or 
-                                result.get('prompt') or 
-                                result.get('final_prompt') or 
-                                None
-                            )
                             return {
                                 'urls': result['urls'],
-                                'enhanced_prompt': enhanced_prompt
+                                'enhanced_prompt': result.get('enhanced_prompt', None)
                             }
                     
                 elif progress_data.get('status') == 'failed':
@@ -177,10 +170,8 @@ def generate_midjourney_image(prompt):
         if 'hash' in response_json:
             image_result = poll_midjourney_result(response_json['hash'], headers)
             if image_result and 'urls' in image_result:
-                # If no enhanced prompt is available, use original prompt
-                enhanced_prompt = image_result.get('enhanced_prompt') or "No enhanced prompt provided"
                 # Return in same format as Ideogram - list of (url, prompt) tuples
-                return [(url, enhanced_prompt) for url in image_result['urls']]
+                return [(url, image_result.get('enhanced_prompt', prompt)) for url in image_result['urls']]
         
         logger.error("No valid response from Midjourney API")
         return None
