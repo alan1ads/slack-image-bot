@@ -61,50 +61,60 @@ except Exception as e:
     logger.error(f"Failed to initialize Slack App: {str(e)}")
     raise
 
-def poll_midjourney_result(hash_id, api_key, max_attempts=60, delay=10):
+def poll_midjourney_result(hash_id, headers, max_attempts=60, delay=10):
     """
     Poll for Midjourney result using the provided hash
     """
-    headers = {
-        'api-key': api_key,
-        'Content-Type': 'application/json'
-    }
-    
     base_url = 'https://api.userapi.ai'
-    status_url = f'{base_url}/midjourney/v2/status?hash={hash_id}'
+    # Make sure we're using the correct endpoint paths
+    progress_url = f'{base_url}/midjourney/v2/progress/{hash_id}'
+    result_url = f'{base_url}/midjourney/v2/result/{hash_id}'
     
     logger.info(f"Starting to poll for results with hash: {hash_id}")
-    logger.info(f"Using status URL: {status_url}")
+    logger.debug(f"Using hash_id: {hash_id}")  # Add this to verify the hash
+    logger.debug(f"Progress URL: {progress_url}")  # Add this to verify the URL
     
     for attempt in range(max_attempts):
         try:
+            # First check progress
             logger.info(f"Checking progress: Attempt {attempt + 1}/{max_attempts}")
             
-            status_response = requests.get(status_url, headers=headers)
+            # Use the same session and headers as the initial request
+            session = requests.Session()
+            session.request = functools.partial(session.request, timeout=None)
             
-            logger.info(f"Status response status: {status_response.status_code}")
-            logger.debug(f"Status response content: {status_response.text}")
-            logger.debug(f"Request URL used: {status_response.request.url}")
+            progress_response = session.get(
+                progress_url,
+                headers=headers
+            )
             
-            if status_response.status_code == 200:
-                status_data = status_response.json()
+            logger.info(f"Progress response status: {progress_response.status_code}")
+            logger.debug(f"Progress response content: {progress_response.text}")
+            logger.debug(f"Request headers: {headers}")  # Add this to verify headers
+            
+            if progress_response.status_code == 200:
+                progress_data = progress_response.json()
+                progress_value = progress_data.get('progress', 0)
                 
-                # Check if the generation is complete
-                if status_data.get('status') == 'done' and status_data.get('progress') == 100:
-                    # Extract image URL from the result
-                    if 'result' in status_data and 'url' in status_data['result']:
-                        return {
-                            'urls': [status_data['result']['url']],
-                            'enhanced_prompt': status_data.get('prompt')
-                        }
+                if progress_value == 100:
+                    result_response = session.get(
+                        result_url,
+                        headers=headers
+                    )
                     
-                elif status_data.get('status') == 'failed':
-                    logger.error(f"Midjourney generation failed: {status_data.get('status_reason')}")
+                    if result_response.status_code == 200:
+                        result = result_response.json()
+                        if result.get('urls') and len(result['urls']) > 0:
+                            return {
+                                'urls': result['urls'],
+                                'enhanced_prompt': result.get('enhanced_prompt', None)
+                            }
+                
+                elif progress_data.get('status') == 'failed':
+                    logger.error(f"Midjourney generation failed: {progress_data.get('error')}")
                     return None
                 
-                logger.info(f"Generation in progress: {status_data.get('progress', 0)}%")
-            else:
-                logger.warning(f"Failed to get status. Status: {status_response.status_code}")
+                logger.info(f"Generation in progress: {progress_value}%")
             
             time.sleep(delay)
             
@@ -115,6 +125,48 @@ def poll_midjourney_result(hash_id, api_key, max_attempts=60, delay=10):
     
     logger.error("Timeout waiting for Midjourney result")
     return None
+
+def upscale_midjourney_image(hash_id, choice, api_key):
+    """
+    Upscale a specific image from the Midjourney generation
+    """
+    logger.info(f"Attempting to upscale image {choice} from hash: {hash_id}")
+    
+    headers = {
+        'api-key': api_key,
+        'Content-Type': 'application/json'
+    }
+    
+    data = {
+        'hash': hash_id,
+        'choice': choice,  # number between 1-4
+        'webhook_type': 'result'
+    }
+    
+    try:
+        response = requests.post(
+            'https://api.userapi.ai/midjourney/v2/upscale',
+            headers=headers,
+            json=data
+        )
+        
+        logger.info(f"Upscale request response status: {response.status_code}")
+        logger.debug(f"Upscale response content: {response.text}")
+        
+        if response.status_code == 200:
+            upscale_data = response.json()
+            if 'hash' in upscale_data:
+                # Poll for the upscaled result
+                upscale_result = poll_midjourney_result(upscale_data['hash'], api_key)
+                if upscale_result and 'urls' in upscale_result:
+                    return upscale_result['urls'][0]  # Return the upscaled image URL
+        
+        logger.error("Failed to upscale image")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error upscaling image: {str(e)}")
+        return None
 
 def generate_midjourney_image(prompt):
     """
@@ -145,17 +197,17 @@ def generate_midjourney_image(prompt):
         logger.info("Making request to Midjourney API...")
         logger.debug(f"Request data: {data}")
         
-        response = requests.post(
+        session = requests.Session()
+        session.request = functools.partial(session.request, timeout=None)
+        
+        response = session.post(
             'https://api.userapi.ai/midjourney/v2/imagine',
             headers=headers,
             json=data
         )
         
-        # Add these debug lines
-        logger.info(f"Initial response status code: {response.status_code}")
-        logger.info(f"Initial response content: {response.text}")
-        
         logger.info(f"Received response from Midjourney API. Status code: {response.status_code}")
+        logger.debug(f"Response content: {response.text}")  # Add this to see the full response
         
         if response.status_code != 200:
             logger.error(f"Midjourney API error. Status code: {response.status_code}")
@@ -168,17 +220,14 @@ def generate_midjourney_image(prompt):
         logger.info("===========================")
         
         if 'hash' in response_json:
-            image_result = poll_midjourney_result(response_json['hash'], api_key)
+            logger.debug(f"Got hash from response: {response_json['hash']}")  # Add this to verify the hash
+            image_result = poll_midjourney_result(response_json['hash'], headers)
             if image_result and 'urls' in image_result:
-                # Return in same format as Ideogram - list of (url, prompt) tuples
                 return [(url, image_result.get('enhanced_prompt', prompt)) for url in image_result['urls']]
         
         logger.error("No valid response from Midjourney API")
         return None
         
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request error: {str(e)}")
-        return None
     except Exception as e:
         logger.error(f"Error generating image: {str(e)}")
         return None
