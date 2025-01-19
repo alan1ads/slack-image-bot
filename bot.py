@@ -61,49 +61,49 @@ except Exception as e:
     logger.error(f"Failed to initialize Slack App: {str(e)}")
     raise
 
-def poll_midjourney_result(hash_id, headers, max_attempts=60, delay=10):
+def poll_midjourney_result(hash_id, api_key, max_attempts=60, delay=10):
     """
     Poll for Midjourney result using the provided hash
     """
+    headers = {
+        'api-key': api_key,
+        'Content-Type': 'application/json'
+    }
+    
     base_url = 'https://api.userapi.ai'
-    url = f'{base_url}/midjourney/v2/result/{hash_id}'
     progress_url = f'{base_url}/midjourney/v2/progress/{hash_id}'
     
     logger.info(f"Starting to poll for results with hash: {hash_id}")
     
     for attempt in range(max_attempts):
         try:
-            # First check progress
             logger.info(f"Checking progress: Attempt {attempt + 1}/{max_attempts}")
             
-            progress_response = requests.get(progress_url, headers=headers)
+            progress_response = requests.get(
+                progress_url,
+                headers=headers
+            )
+            
             logger.info(f"Progress response status: {progress_response.status_code}")
             logger.debug(f"Progress response content: {progress_response.text}")
             
             if progress_response.status_code == 200:
                 progress_data = progress_response.json()
-                progress_value = progress_data.get('progress', 0)
                 
-                # Check if generation is complete
-                if progress_value == 100:
-                    # Now get the result
-                    result_response = requests.get(url, headers=headers)
-                    logger.info(f"Result response status: {result_response.status_code}")
-                    logger.debug(f"Result response content: {result_response.text}")
-                    
-                    if result_response.status_code == 200:
-                        result = result_response.json()
-                        if result.get('urls') and len(result['urls']) > 0:
-                            return {
-                                'urls': result['urls'],
-                                'enhanced_prompt': result.get('enhanced_prompt', None)
-                            }
+                # Check if the generation is complete
+                if progress_data.get('status') == 'done' and progress_data.get('progress') == 100:
+                    # Extract image URL directly from the progress response
+                    if 'result' in progress_data and 'url' in progress_data['result']:
+                        return {
+                            'urls': [progress_data['result']['url']],
+                            'enhanced_prompt': progress_data.get('prompt')
+                        }
                     
                 elif progress_data.get('status') == 'failed':
-                    logger.error(f"Midjourney generation failed: {progress_data.get('error')}")
+                    logger.error(f"Midjourney generation failed: {progress_data.get('status_reason')}")
                     return None
                 
-                logger.info(f"Generation in progress: {progress_value}%")
+                logger.info(f"Generation in progress: {progress_data.get('progress', 0)}%")
             else:
                 logger.warning(f"Failed to get progress. Status: {progress_response.status_code}")
             
@@ -168,7 +168,7 @@ def generate_midjourney_image(prompt):
         logger.info("===========================")
         
         if 'hash' in response_json:
-            image_result = poll_midjourney_result(response_json['hash'], headers)
+            image_result = poll_midjourney_result(response_json['hash'], api_key)
             if image_result and 'urls' in image_result:
                 # Return in same format as Ideogram - list of (url, prompt) tuples
                 return [(url, image_result.get('enhanced_prompt', prompt)) for url in image_result['urls']]
@@ -184,9 +184,6 @@ def generate_midjourney_image(prompt):
         return None
 
 def generate_ideogram_image(prompt, num_images=5):
-    """
-    Generate images using Ideogram API
-    """
     logger.info(f"Attempting to generate {num_images} images with prompt: {prompt}")
     
     api_key = os.environ.get("IDEOGRAM_API_KEY")
@@ -210,10 +207,15 @@ def generate_ideogram_image(prompt, num_images=5):
     }
     
     try:
-        logger.info(f"Making request to Ideogram API...")
+        logger.info(f"Making request to Ideogram API for {num_images} images...")
+        logger.debug(f"Request headers (excluding auth): Content-Type: {headers['Content-Type']}")
         logger.debug(f"Request data: {data}")
         
-        response = requests.post(
+        # Create a session with custom timeout settings
+        session = requests.Session()
+        session.request = functools.partial(session.request, timeout=None)  # Disable timeout
+        
+        response = session.post(
             'https://api.ideogram.ai/generate',
             headers=headers,
             json=data
