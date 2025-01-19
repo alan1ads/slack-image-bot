@@ -74,18 +74,17 @@ def poll_midjourney_result(hash_id, api_key, max_attempts=60, delay=10):
     status_url = f'{base_url}/midjourney/v2/status?hash={hash_id}'
     
     logger.info(f"Starting to poll for results with hash: {hash_id}")
+    logger.info(f"Using status URL: {status_url}")
     
     for attempt in range(max_attempts):
         try:
             logger.info(f"Checking progress: Attempt {attempt + 1}/{max_attempts}")
             
-            status_response = requests.get(
-                status_url,
-                headers=headers
-            )
+            status_response = requests.get(status_url, headers=headers)
             
             logger.info(f"Status response status: {status_response.status_code}")
             logger.debug(f"Status response content: {status_response.text}")
+            logger.debug(f"Request URL used: {status_response.request.url}")
             
             if status_response.status_code == 200:
                 status_data = status_response.json()
