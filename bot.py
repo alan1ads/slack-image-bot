@@ -137,14 +137,14 @@ def upscale_midjourney_image(hash_id, choice, api_key, max_attempts=5, poll_max_
                 'https://api.userapi.ai/midjourney/v2/upscale',
                 headers=headers,
                 json=data,
-                timeout=30  # Add timeout
+                timeout=30
             )
             
             if upscale_response.status_code != 200:
                 logger.error(f"Upscale request failed: {upscale_response.status_code}")
                 logger.error(f"Response content: {upscale_response.text}")
                 if attempt < max_attempts - 1:
-                    time.sleep(10)  # Longer delay between retry attempts
+                    time.sleep(10)
                 continue
                 
             upscale_data = upscale_response.json()
@@ -154,7 +154,6 @@ def upscale_midjourney_image(hash_id, choice, api_key, max_attempts=5, poll_max_
                     time.sleep(10)
                 continue
             
-            # Poll for the upscaled result with its own timeout
             upscale_result = poll_midjourney_result(
                 upscale_data['hash'], 
                 api_key, 
@@ -209,7 +208,6 @@ def generate_midjourney_image(prompt):
     }
     
     try:
-        # Initial image generation
         logger.info("Initiating Midjourney image generation...")
         response = requests.post(
             'https://api.userapi.ai/midjourney/v2/imagine',
@@ -230,32 +228,28 @@ def generate_midjourney_image(prompt):
             logger.error("No hash in response")
             return None
             
-        # Wait for initial generation to complete
         logger.info("Waiting for initial generation to complete...")
         initial_result = poll_midjourney_result(response_data['hash'], api_key)
         if not initial_result:
             logger.error("Failed to get initial generation result")
             return None
             
-        # Store results for each upscaled image
         upscaled_results = []
         total_variations = 4
         
-        # Upscale each variation with improved error handling and delays
         for i in range(1, total_variations + 1):
             logger.info(f"=== Processing variation {i}/{total_variations} ===")
             
-            # Add delay between upscale attempts to avoid rate limiting
             if i > 1:
-                time.sleep(15)  # Increased delay between variations
+                time.sleep(15)
             
             upscaled_url = upscale_midjourney_image(
                 response_data['hash'],
                 i,
                 api_key,
-                max_attempts=5,  # Increased max attempts
-                poll_max_attempts=45,  # Longer polling for upscale
-                poll_delay=8  # Adjusted poll delay
+                max_attempts=5,
+                poll_max_attempts=45,
+                poll_delay=8
             )
             
             if upscaled_url:
@@ -267,7 +261,6 @@ def generate_midjourney_image(prompt):
             else:
                 logger.warning(f"Failed to upscale variation {i}, continuing with next variation")
         
-        # Return results if we have any successful upscales
         if upscaled_results:
             logger.info(f"Successfully generated {len(upscaled_results)} upscaled images")
             return upscaled_results
@@ -278,7 +271,6 @@ def generate_midjourney_image(prompt):
     except Exception as e:
         logger.error(f"Error in generate_midjourney_image: {str(e)}")
         return None
-
 def generate_ideogram_image(prompt, num_images=5):
     """
     Generate images using Ideogram API
@@ -300,20 +292,14 @@ def generate_ideogram_image(prompt, num_images=5):
             'prompt': prompt,
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
-            'magic_prompt': 'AUTO',
+            'magic_prompt_option': 'AUTO',
             'num_images': num_images
         }
     }
     
     try:
-        logger.info(f"Making request to Ideogram API for {num_images} images...")
-        logger.debug(f"Request headers (excluding auth): Content-Type: {headers['Content-Type']}")
-        logger.debug(f"Request data: {data}")
-        
-        session = requests.Session()
-        session.request = functools.partial(session.request, timeout=None)
-        
-        response = session.post(
+        logger.info(f"Making request to Ideogram API...")
+        response = requests.post(
             'https://api.ideogram.ai/generate',
             headers=headers,
             json=data
@@ -344,121 +330,96 @@ def generate_ideogram_image(prompt, num_images=5):
             return image_data
         else:
             logger.error("No image data found in response")
-            logger.debug(f"Full response: {response_json}")
             return None
         
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Request error: {str(e)}")
-        return None
     except Exception as e:
         logger.error(f"Error generating image: {str(e)}")
         return None
 
-def generate_ideogram_recreation(image_url, prompt=None):
+def generate_ideogram_recreation(image_file_content, prompt=None):
     """
-    Generate recreations of an image using Ideogram API
+    Generate recreations of an image using Ideogram Remix API
     """
+    logger.info("Starting image recreation with Ideogram")
+    
     api_key = os.environ.get('IDEOGRAM_API_KEY')
     if not api_key:
-        logger.error("Ideogram API key not found in environment variables")
+        logger.error("IDEOGRAM_API_KEY not found")
         return None
-
-    num_images = 4  # Number of recreations to generate
     
-    headers = {
-        'Api-Key': api_key,
-        'Accept': 'application/json'
-    }
-    
-    # Download the image from the URL first
     try:
-        image_response = requests.get(image_url)
-        if image_response.status_code != 200:
-            logger.error(f"Failed to download image from URL: {image_url}")
-            return None
-            
-        # Create the multipart form data
-        files = {
-            'image_file': ('image.png', image_response.content, 'image/png')
+        headers = {
+            'Api-Key': api_key,
+            'Accept': 'application/json'
         }
         
-        data = {
-            'prompt': prompt if prompt else "Recreate this image",
+        # Prepare the multipart/form-data request
+        files = {
+            'image_file': ('image.png', image_file_content, 'image/png')
+        }
+        
+        # Prepare the remix request data
+        request_data = {
+            'prompt': prompt if prompt else "Recreate this image with creative variations",
+            'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
-            'num_images': str(num_images),
             'magic_prompt_option': 'AUTO'
         }
         
-        logger.info(f"Making request to Ideogram API for {num_images} recreations...")
-        logger.info(f"Request URL: https://api.ideogram.ai/api/v1/generate")
-        logger.info(f"Request data: {json.dumps(data, indent=2)}")
+        # Create proper multipart form data
+        data = {
+            'image_request': json.dumps(request_data)
+        }
+        
+        logger.info("Making request to Ideogram Remix API...")
+        logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
         
         response = requests.post(
-            'https://api.ideogram.ai/api/v1/generate',
+            'https://api.ideogram.ai/remix',
             headers=headers,
             data=data,
             files=files,
             timeout=None
         )
         
-        logger.info(f"Received response from Ideogram API. Status code: {response.status_code}")
-        logger.info(f"Response content: {response.text}")
+        logger.info(f"Remix API response status: {response.status_code}")
         
         if response.status_code != 200:
-            logger.error(f"Ideogram API error. Status code: {response.status_code}")
+            logger.error(f"Failed to generate recreations. Status: {response.status_code}")
             logger.error(f"Response content: {response.text}")
             return None
-            
+        
         response_json = response.json()
-        logger.info("=== IDEOGRAM API RESPONSE ===")
+        logger.info("=== REMIX API RESPONSE ===")
         logger.info(json.dumps(response_json, indent=2))
-        logger.info("===========================")
+        logger.info("=========================")
         
         if 'data' in response_json and response_json['data']:
             image_data = []
             for image_info in response_json['data']:
                 if 'url' in image_info:
-                    # Use original prompt if no enhanced prompt is provided
-                    image_prompt = image_info.get('prompt', prompt if prompt else "Image recreation")
+                    # Use enhanced prompt if available, otherwise use original or default
+                    image_prompt = (
+                        image_info.get('enhanced_prompt') or 
+                        image_info.get('prompt') or 
+                        prompt or 
+                        "Recreation variation"
+                    )
                     image_data.append((image_info['url'], image_prompt))
             
-            logger.info(f"Successfully extracted {len(image_data)} recreated images")
+            logger.info(f"Successfully generated {len(image_data)} recreations")
             return image_data
         else:
-            logger.error("No image data found in response")
+            logger.error("No image data in response")
             return None
-            
-    except Exception as e:
-        logger.error(f"Error generating recreation: {str(e)}")
-        return None
-
-def upload_to_storage(file_path):
-    """
-    Upload a file to Render's disk storage and create a temporary URL
-    """
-    # Create a directory in Render's writable filesystem if it doesn't exist
-    upload_dir = "/opt/render/project/src/uploads"
-    if not os.path.exists(upload_dir):
-        os.makedirs(upload_dir)
-    
-    # Generate unique filename
-    filename = f"{int(time.time())}_{os.path.basename(file_path)}"
-    destination = os.path.join(upload_dir, filename)
-    
-    try:
-        # Copy file to uploads directory
-        shutil.copy2(file_path, destination)
         
-        # Return the path that can be used by the application
-        return destination
     except Exception as e:
-        logger.error(f"Failed to copy file to uploads directory: {str(e)}")
-        raise
-
+        logger.error(f"Error in generate_ideogram_recreation: {str(e)}")
+        return None
 @app.command("/generate")
 def handle_generate_command(ack, respond, command, client):
     """
-    Handle the /generate slash command with file upload support
+    Handle the /generate slash command
     """
     logger.info(f"Received command: {command}")
     ack()
@@ -468,8 +429,8 @@ def handle_generate_command(ack, respond, command, client):
     if not command_text:
         respond({
             "text": "Please specify a service and parameters:\n" +
-                   "1. Text generation: `/generate [ideogram|midjourney] your prompt`\n" +
-                   "2. Image recreation: `/generate ideogram-recreation` (attach an image) [optional prompt]",
+                   "1. Text to image: `/generate [ideogram|midjourney] your prompt`\n" +
+                   "2. Image recreation: `/generate recreation` (with an image file)",
             "response_type": "ephemeral"
         })
         return
@@ -477,9 +438,9 @@ def handle_generate_command(ack, respond, command, client):
     parts = command_text.split()
     service = parts[0].lower()
     
-    if service not in ['ideogram', 'midjourney', 'ideogram-recreation']:
+    if service not in ['ideogram', 'midjourney', 'recreation']:
         respond({
-            "text": "Please specify a valid service: 'ideogram', 'midjourney', or 'ideogram-recreation'",
+            "text": "Please specify a valid service: 'ideogram', 'midjourney', or 'recreation'",
             "response_type": "ephemeral"
         })
         return
@@ -490,17 +451,17 @@ def handle_generate_command(ack, respond, command, client):
         current_channel_id = command['channel_id']
         is_public = current_channel_id == public_channel_id
 
-        if service == 'ideogram-recreation':
-            # Open a modal for file upload
+        if service == 'recreation':
+            # Open modal for file upload
             try:
                 client.views_open(
                     trigger_id=command["trigger_id"],
                     view={
                         "type": "modal",
-                        "callback_id": "image_upload_modal",
+                        "callback_id": "recreation_upload_modal",
                         "title": {
                             "type": "plain_text",
-                            "text": "Upload Image",
+                            "text": "Upload Image for Recreation",
                             "emoji": True
                         },
                         "submit": {
@@ -519,7 +480,7 @@ def handle_generate_command(ack, respond, command, client):
                                 },
                                 "label": {
                                     "type": "plain_text",
-                                    "text": "Upload an image",
+                                    "text": "Select an image to recreate",
                                     "emoji": True
                                 }
                             },
@@ -532,12 +493,12 @@ def handle_generate_command(ack, respond, command, client):
                                     "action_id": "prompt_input",
                                     "placeholder": {
                                         "type": "plain_text",
-                                        "text": "Optional: Add a prompt to guide the recreation"
+                                        "text": "Optional: Add guidance for the recreation"
                                     }
                                 },
                                 "label": {
                                     "type": "plain_text",
-                                    "text": "Prompt",
+                                    "text": "Recreation Prompt",
                                     "emoji": True
                                 }
                             }
@@ -552,8 +513,14 @@ def handle_generate_command(ack, respond, command, client):
                 })
             return
         else:
-            # Handle regular text-to-image generation
+            # Handle text-to-image generation
             prompt = ' '.join(parts[1:])
+            if not prompt:
+                respond({
+                    "text": f"Please provide a prompt for {service}.",
+                    "response_type": "ephemeral"
+                })
+                return
             
             # Tell user we're working on it
             initial_response = respond({
@@ -579,7 +546,7 @@ def handle_generate_command(ack, respond, command, client):
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"*Original Prompt:*\n```{prompt}```"
+                            "text": f"*📝 Original Prompt:*\n```{prompt}```"
                         }
                     }
                 ]
@@ -594,7 +561,7 @@ def handle_generate_command(ack, respond, command, client):
                             "type": "section",
                             "text": {
                                 "type": "mrkdwn",
-                                "text": f"*Image {i} of {len(result)}*\n```{enhanced_prompt}```"
+                                "text": f"*✨ Enhanced Prompt for Image {i}:*\n```{enhanced_prompt}```"
                             }
                         },
                         {
@@ -620,7 +587,7 @@ def handle_generate_command(ack, respond, command, client):
                 # Send the response with appropriate visibility
                 response_payload = {
                     "blocks": blocks,
-                    "text": f"Generated {len(result)} images using {service.title()}",  # Fallback text
+                    "text": f"Generated {len(result)} images using {service.title()}",
                     "unfurl_links": False,
                     "unfurl_media": False,
                     "response_type": "in_channel" if is_public else "ephemeral",
@@ -628,7 +595,7 @@ def handle_generate_command(ack, respond, command, client):
                 }
                 
                 # Log channel information
-                logger.info(f"Sending response - Channel ID: {current_channel_id}, Public Channel: {public_channel_id}, Is Public: {is_public}")
+                logger.info(f"Sending response - Channel: {current_channel_id}, Public: {public_channel_id}, Is Public: {is_public}")
                 
                 respond(response_payload)
                 logger.info(f"Successfully sent {len(result)} images to Slack")
@@ -647,201 +614,170 @@ def handle_generate_command(ack, respond, command, client):
         logger.error(error_msg)
         respond({
             "text": "An unexpected error occurred. Please try again or contact support if the problem persists.",
-            "response_type": "ephemeral"
+            "response_type": "ephemeral",
+            "replace_original": True
         })
-
-@app.view("image_upload_modal")
-def handle_image_upload_submission(ack, body, view, client):
+@app.view("recreation_upload_modal")
+def handle_recreation_submission(ack, body, view, client):
     """
-    Handle the submission of the image upload modal
+    Handle the submission of the recreation upload modal
     """
     ack()
     
     try:
         user_id = body["user"]["id"]
-        prompt = view["state"]["values"]["prompt_block"]["prompt_input"]["value"]
+        prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
         
         # Get file from the input
         try:
-            image_block = view["state"]["values"]["image_block"]
-            logger.info(f"Image block content: {json.dumps(image_block, indent=2)}")
+            file_data = view["state"]["values"]["image_block"]["file_input"]["files"][0]
             
-            # Check for file input
-            for key in image_block:
-                file_data = image_block[key]
-                if isinstance(file_data, dict) and "files" in file_data:
-                    files = file_data["files"]
-                    break
-            else:
-                raise KeyError("No files found in any input")
-            
-            if not files:
-                raise ValueError("No files uploaded")
-                
-            file_data = files[0]
-            logger.info(f"File data: {json.dumps(file_data, indent=2)}")
-            
-        except Exception as e:
+        except (KeyError, IndexError) as e:
             logger.error(f"Error accessing file data: {str(e)}")
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
-                text="⚠️ Could not access the uploaded file. Please try again."
+                text="⚠️ No image file was uploaded. Please try again."
             )
             return
             
-        # Send initial status
+        # Send initial status message
         client.chat_postEphemeral(
             channel=user_id,
             user=user_id,
-            text="🔄 Processing your request..."
+            text="🔄 Processing your image for recreation..."
         )
         
         try:
-            # Get file URL and download
-            if isinstance(file_data, str):
-                file_id = file_data
-                file_url = f"https://files.slack.com/files-pri/{body['team']['id']}/{file_id}"
-            else:
-                file_url = file_data.get("url_private", "")
-                if not file_url:
-                    raise ValueError("No file URL found")
+            # Get the file URL and download it
+            file_info = client.files_info(file=file_data)
+            file_url = file_info["file"]["url_private"]
             
-            logger.info(f"Downloading file from URL: {file_url}")
-            
-            # Download file
+            # Download file with proper authorization
             headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
             response = requests.get(file_url, headers=headers)
             
             if response.status_code != 200:
                 raise Exception(f"Failed to download file: {response.status_code}")
-                
-            logger.info("Successfully downloaded file from Slack")
             
-            # Process the image
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
-                temp_file.write(response.content)
-                temp_path = temp_file.name
-                logger.info(f"Saved temporary file to: {temp_path}")
-                
-                try:
-                    # Update status
-                    client.chat_postEphemeral(
-                        channel=user_id,
-                        user=user_id,
-                        text="🎨 Generating recreations..."
-                    )
-                    
-                    # Prepare the request to Ideogram API
-                    with open(temp_path, 'rb') as image_file:
-                        files = {
-                            'image_file': ('image.png', image_file, 'image/png')
-                        }
-                        
-                        data = {
-                            'prompt': prompt if prompt else "Recreate this image with artistic improvements",
-                            'model': 'V_2',
-                            'num_images': '4',
-                            'magic_prompt_option': 'AUTO'
-                        }
-                        
-                        # Make request to Ideogram API
-                        ideogram_headers = {
-                            'Api-Key': os.environ.get('IDEOGRAM_API_KEY'),
-                            'Accept': 'application/json'
-                        }
-                        
-                        logger.info("Making request to Ideogram API...")
-                        logger.info(f"Headers: {ideogram_headers}")
-                        logger.info(f"Data: {json.dumps(data, indent=2)}")
-                        
-                        ideogram_response = requests.post(
-                            'https://api.ideogram.ai/api/v1/generate',
-                            headers=ideogram_headers,
-                            data=data,
-                            files=files,
-                            timeout=None
-                        )
-                        
-                        logger.info(f"Ideogram API response status: {ideogram_response.status_code}")
-                        logger.info(f"Response headers: {dict(ideogram_response.headers)}")
-                        logger.info(f"Response content: {ideogram_response.text}")
-                        
-                        if ideogram_response.status_code != 200:
-                            error_msg = f"Failed to generate recreations. Status: {ideogram_response.status_code}, Response: {ideogram_response.text}"
-                            logger.error(error_msg)
-                            raise Exception(error_msg)
-                            
-                        result_data = ideogram_response.json()
-                        logger.info(f"Parsed response data: {json.dumps(result_data, indent=2)}")
-                        
-                        if 'data' in result_data and result_data['data']:
-                            # Send results
-                            public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
-                            target_channel = public_channel_id if public_channel_id else user_id
-                            
-                            for i, image_info in enumerate(result_data['data'], 1):
-                                if 'url' in image_info:
-                                    image_url = image_info['url']
-                                    image_prompt = image_info.get('prompt', prompt if prompt else "Image recreation")
-                                    
-                                    blocks = [
-                                        {
-                                            "type": "section",
-                                            "text": {
-                                                "type": "mrkdwn",
-                                                "text": f"*Recreation {i}/4*\n{image_prompt}"
-                                            }
-                                        },
-                                        {
-                                            "type": "image",
-                                            "title": {
-                                                "type": "plain_text",
-                                                "text": "Generated Image"
-                                            },
-                                            "image_url": image_url,
-                                            "alt_text": "AI generated image"
-                                        }
-                                    ]
-                                    
-                                    client.chat_postMessage(
-                                        channel=target_channel,
-                                        blocks=blocks,
-                                        text=f"Generated recreation {i}/4"
-                                    )
-                                    time.sleep(1)
-                        else:
-                            raise Exception("No image data in response")
-                            
-                finally:
-                    # Cleanup
-                    try:
-                        os.unlink(temp_path)
-                        logger.info("Cleaned up temporary file")
-                    except Exception as e:
-                        logger.error(f"Failed to delete temp file: {str(e)}")
-                        
-        except Exception as e:
-            logger.error(f"Error processing file: {str(e)}")
+            # Get the image content
+            image_content = response.content
+            
+            # Update status
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
-                text="❌ Failed to process the file. Please try again."
+                text="🎨 Generating recreations... This may take a minute."
+            )
+            
+            # Generate recreations using Ideogram
+            result = generate_ideogram_recreation(image_content, prompt)
+            
+            if not result:
+                raise Exception("Failed to generate recreations")
+            
+            # Get public channel ID and determine where to post
+            public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
+            target_channel = public_channel_id if public_channel_id else user_id
+            is_public = bool(public_channel_id)
+            
+            # Create and send message blocks for results
+            blocks = [
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "🎨 Image Recreation Results",
+                        "emoji": True
+                    }
+                }
+            ]
+            
+            if prompt:
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*📝 Recreation Prompt:*\n```{prompt}```"
+                    }
+                })
+            
+            blocks.append({"type": "divider"})
+            
+            # Add each recreation result
+            for i, (image_url, enhanced_prompt) in enumerate(result, 1):
+                blocks.extend([
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*✨ Recreation {i} Enhanced Prompt:*\n```{enhanced_prompt}```"
+                        }
+                    },
+                    {
+                        "type": "image",
+                        "title": {
+                            "type": "plain_text",
+                            "text": f"Recreation {i}"
+                        },
+                        "image_url": image_url,
+                        "alt_text": f"AI recreation {i}"
+                    },
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": f"🔗 <{image_url}|Click to download recreation {i}>"
+                            }
+                        ]
+                    }
+                ])
+                
+                if i < len(result):
+                    blocks.append({"type": "divider"})
+            
+            # Send the results
+            client.chat_postMessage(
+                channel=target_channel,
+                blocks=blocks,
+                text="Image Recreation Results",
+                unfurl_links=False,
+                unfurl_media=False
+            )
+            
+            # If sent to public channel, notify user
+            if is_public:
+                client.chat_postEphemeral(
+                    channel=user_id,
+                    user=user_id,
+                    text="✅ Recreation results have been posted in the public channel!"
+                )
+            
+        except Exception as e:
+            logger.error(f"Error processing recreation: {str(e)}")
+            client.chat_postEphemeral(
+                channel=user_id,
+                user=user_id,
+                text="❌ Failed to process the recreation. Please try again."
             )
             
     except Exception as e:
-        logger.error(f"Error in submission handler: {str(e)}")
+        logger.error(f"Error in recreation submission handler: {str(e)}")
         if body and "user" in body:
             client.chat_postEphemeral(
                 channel=body["user"]["id"],
                 user=body["user"]["id"],
                 text="❌ An error occurred. Please try again."
             )
-
 def run_slack_app():
+    """
+    Run the Slack app in socket mode
+    """
     handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
     handler.start()
 
+# Main entry point
 if __name__ == "__main__":
     try:
         # Start Slack app in a separate thread
