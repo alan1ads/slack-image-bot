@@ -664,6 +664,7 @@ def handle_image_upload_submission(ack, body, view, client):
         # Get file from the input
         try:
             image_block = view["state"]["values"]["image_block"]
+            logger.info(f"Image block content: {json.dumps(image_block, indent=2)}")
             
             # Check for file input
             for key in image_block:
@@ -678,6 +679,7 @@ def handle_image_upload_submission(ack, body, view, client):
                 raise ValueError("No files uploaded")
                 
             file_data = files[0]
+            logger.info(f"File data: {json.dumps(file_data, indent=2)}")
             
         except Exception as e:
             logger.error(f"Error accessing file data: {str(e)}")
@@ -705,6 +707,8 @@ def handle_image_upload_submission(ack, body, view, client):
                 if not file_url:
                     raise ValueError("No file URL found")
             
+            logger.info(f"Downloading file from URL: {file_url}")
+            
             # Download file
             headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
             response = requests.get(file_url, headers=headers)
@@ -712,10 +716,13 @@ def handle_image_upload_submission(ack, body, view, client):
             if response.status_code != 200:
                 raise Exception(f"Failed to download file: {response.status_code}")
                 
+            logger.info("Successfully downloaded file from Slack")
+            
             # Process the image
             with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
                 temp_file.write(response.content)
                 temp_path = temp_file.name
+                logger.info(f"Saved temporary file to: {temp_path}")
                 
                 try:
                     # Update status
@@ -746,7 +753,7 @@ def handle_image_upload_submission(ack, body, view, client):
                         
                         logger.info("Making request to Ideogram API...")
                         logger.info(f"Headers: {ideogram_headers}")
-                        logger.info(f"Data: {data}")
+                        logger.info(f"Data: {json.dumps(data, indent=2)}")
                         
                         ideogram_response = requests.post(
                             'https://api.ideogram.ai/api/v1/generate',
@@ -757,12 +764,16 @@ def handle_image_upload_submission(ack, body, view, client):
                         )
                         
                         logger.info(f"Ideogram API response status: {ideogram_response.status_code}")
+                        logger.info(f"Response headers: {dict(ideogram_response.headers)}")
                         logger.info(f"Response content: {ideogram_response.text}")
                         
                         if ideogram_response.status_code != 200:
-                            raise Exception("Failed to generate recreations")
+                            error_msg = f"Failed to generate recreations. Status: {ideogram_response.status_code}, Response: {ideogram_response.text}"
+                            logger.error(error_msg)
+                            raise Exception(error_msg)
                             
                         result_data = ideogram_response.json()
+                        logger.info(f"Parsed response data: {json.dumps(result_data, indent=2)}")
                         
                         if 'data' in result_data and result_data['data']:
                             # Send results
@@ -806,6 +817,7 @@ def handle_image_upload_submission(ack, body, view, client):
                     # Cleanup
                     try:
                         os.unlink(temp_path)
+                        logger.info("Cleaned up temporary file")
                     except Exception as e:
                         logger.error(f"Failed to delete temp file: {str(e)}")
                         
