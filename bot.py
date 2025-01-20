@@ -500,19 +500,34 @@ def handle_generate_command(ack, respond, command, client):
                     "callback_id": "image_upload_modal",
                     "title": {
                         "type": "plain_text",
-                        "text": "Upload Image for Recreation"
+                        "text": "Upload Image",  # Shortened title
+                        "emoji": True
                     },
                     "submit": {
                         "type": "plain_text",
-                        "text": "Generate"
+                        "text": "Generate",
+                        "emoji": True
+                    },
+                    "close": {
+                        "type": "plain_text",
+                        "text": "Cancel",
+                        "emoji": True
                     },
                     "blocks": [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": "Upload an image to recreate using Ideogram AI"
+                            }
+                        },
                         {
                             "type": "input",
                             "block_id": "image_block",
                             "label": {
                                 "type": "plain_text",
-                                "text": "Upload an image"
+                                "text": "Image",
+                                "emoji": True
                             },
                             "element": {
                                 "type": "file_input",
@@ -526,14 +541,16 @@ def handle_generate_command(ack, respond, command, client):
                             "optional": True,
                             "label": {
                                 "type": "plain_text",
-                                "text": "Optional prompt"
+                                "text": "Optional prompt",
+                                "emoji": True
                             },
                             "element": {
                                 "type": "plain_text_input",
                                 "action_id": "prompt_input",
                                 "placeholder": {
                                     "type": "plain_text",
-                                    "text": "Enter a prompt to guide the recreation (optional)"
+                                    "text": "Enter a prompt to guide the recreation",
+                                    "emoji": True
                                 }
                             }
                         }
