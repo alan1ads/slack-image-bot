@@ -9,6 +9,9 @@ import threading
 import json
 from flask import Flask, jsonify
 import functools
+import tempfile
+import shutil
+from pathlib import Path
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -351,10 +354,112 @@ def generate_ideogram_image(prompt, num_images=5):
         logger.error(f"Error generating image: {str(e)}")
         return None
 
-@app.command("/generate")
-def handle_generate_command(ack, respond, command):
+def generate_ideogram_recreation(image_url, prompt=None, num_images=4):
     """
-    Handle the /generate slash command
+    Generate Ideogram images based on an uploaded image
+    """
+    logger.info(f"Generating Ideogram recreation from image: {image_url}")
+    logger.info(f"With prompt: {prompt if prompt else 'No prompt provided'}")
+    
+    api_key = os.getenv("IDEOGRAM_API_KEY")
+    if not api_key:
+        logger.error("IDEOGRAM_API_KEY is not set")
+        return None
+        
+    headers = {
+        'Api-Key': api_key,
+        'Content-Type': 'application/json'
+    }
+    
+    data = {
+        'image_recreation_request': {
+            'image_url': image_url,
+            'model': 'V_2',  # Using latest model
+            'num_images': num_images
+        }
+    }
+    
+    # Add optional prompt if provided
+    if prompt:
+        data['image_recreation_request']['prompt'] = prompt
+    
+    try:
+        logger.info(f"Making request to Ideogram API for {num_images} recreations...")
+        logger.debug(f"Request data: {data}")
+        
+        session = requests.Session()
+        session.request = functools.partial(session.request, timeout=None)
+        
+        response = session.post(
+            'https://api.ideogram.ai/recreation',
+            headers=headers,
+            json=data
+        )
+        
+        logger.info(f"Received response from Ideogram API. Status code: {response.status_code}")
+        
+        if response.status_code != 200:
+            logger.error(f"Ideogram API error. Status code: {response.status_code}")
+            logger.error(f"Response content: {response.text}")
+            return None
+            
+        response_json = response.json()
+        logger.info("=== IDEOGRAM API RESPONSE ===")
+        logger.info(json.dumps(response_json, indent=2))
+        logger.info("===========================")
+        
+        if 'data' in response_json and response_json['data']:
+            image_data = []
+            for image_info in response_json['data']:
+                if 'url' in image_info:
+                    # Use original prompt if no enhanced prompt is provided
+                    image_prompt = image_info.get('prompt', prompt if prompt else "Image recreation")
+                    image_data.append((image_info['url'], image_prompt))
+            
+            logger.info(f"Successfully extracted {len(image_data)} recreated images")
+            return image_data
+        else:
+            logger.error("No image data found in response")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error generating recreation: {str(e)}")
+        return None
+
+def upload_to_storage(file_path):
+    """
+    Upload a file to Render's disk storage and create a temporary URL
+    """
+    try:
+        # Create a directory in Render's writable filesystem if it doesn't exist
+        upload_dir = "/opt/render/project/src/uploads"
+        if not os.path.exists(upload_dir):
+            os.makedirs(upload_dir)
+        
+        # Generate unique filename
+        filename = f"{int(time.time())}_{os.path.basename(file_path)}"
+        destination = os.path.join(upload_dir, filename)
+        
+        # Copy file to uploads directory
+        shutil.copy2(file_path, destination)
+        
+        # Get the base URL from environment variable
+        base_url = os.environ.get('RENDER_EXTERNAL_URL', 'http://localhost:8080')
+        
+        # Create and return the public URL
+        public_url = f"{base_url}/uploads/{filename}"
+        logger.info(f"File uploaded successfully. Public URL: {public_url}")
+        
+        return public_url
+        
+    except Exception as e:
+        logger.error(f"Failed to upload file to storage: {str(e)}")
+        raise
+
+@app.command("/generate")
+def handle_generate_command(ack, respond, command, client):
+    """
+    Handle the /generate slash command with file upload support
     """
     logger.info(f"Received command: {command}")
     ack()
@@ -363,133 +468,308 @@ def handle_generate_command(ack, respond, command):
     
     if not command_text:
         respond({
-            "text": "Please specify a service (ideogram or midjourney) and a prompt.\nExample: `/generate ideogram a beautiful sunset` or `/generate midjourney a beautiful sunset`",
+            "text": "Please specify a service and parameters:\n" +
+                   "1. Text generation: `/generate [ideogram|midjourney] your prompt`\n" +
+                   "2. Image recreation: `/generate ideogram-recreation` (attach an image) [optional prompt]",
             "response_type": "ephemeral"
         })
         return
     
     parts = command_text.split()
-    
-    if len(parts) < 2:
-        respond({
-            "text": "Please specify both a service (ideogram or midjourney) and a prompt.\nExample: `/generate ideogram a beautiful sunset` or `/generate midjourney a beautiful sunset`",
-            "response_type": "ephemeral"
-        })
-        return
-    
     service = parts[0].lower()
-    if service not in ['ideogram', 'midjourney']:
+    
+    if service not in ['ideogram', 'midjourney', 'ideogram-recreation']:
         respond({
-            "text": "Please specify a valid service: 'ideogram' or 'midjourney'.\nExample: `/generate ideogram a beautiful sunset` or `/generate midjourney a beautiful sunset`",
+            "text": "Please specify a valid service: 'ideogram', 'midjourney', or 'ideogram-recreation'",
             "response_type": "ephemeral"
         })
         return
-    
-    prompt = ' '.join(parts[1:])
-    
+
     try:
         # Get channel IDs
         public_channel_id = os.environ['PUBLIC_CHANNEL_ID']
         current_channel_id = command['channel_id']
-        
-        # Determine if this is the public channel
-        is_public_channel = current_channel_id == public_channel_id
-        
-        # Tell user we're working on it
-        initial_response = respond({
-            "text": f"Working on generating images using {service}...\nThis might take a few minutes, especially for Midjourney with upscaling.",
-            "response_type": "ephemeral"
-        })
-        
-        # Generate images based on selected service
-        result = generate_midjourney_image(prompt) if service == 'midjourney' else generate_ideogram_image(prompt)
-        
-        if result:
-            # Create blocks for each image
-            blocks = [
-                {
-                    "type": "header",
-                    "text": {
+        is_public = current_channel_id == public_channel_id
+
+        if service == 'ideogram-recreation':
+            # Open a modal for file upload
+            client.views_open(
+                trigger_id=command["trigger_id"],
+                view={
+                    "type": "modal",
+                    "callback_id": "image_upload_modal",
+                    "title": {
                         "type": "plain_text",
-                        "text": f"🎨 Generated {len(result)} images using {service.title()}",
-                        "emoji": True
-                    }
-                },
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*Original Prompt:*\n```{prompt}```"
-                    }
+                        "text": "Upload Image for Recreation"
+                    },
+                    "submit": {
+                        "type": "plain_text",
+                        "text": "Generate"
+                    },
+                    "blocks": [
+                        {
+                            "type": "input",
+                            "block_id": "image_block",
+                            "label": {
+                                "type": "plain_text",
+                                "text": "Upload an image"
+                            },
+                            "element": {
+                                "type": "file_input",
+                                "action_id": "image_input",
+                                "filetypes": ["png", "jpg", "jpeg", "gif"]
+                            }
+                        },
+                        {
+                            "type": "input",
+                            "block_id": "prompt_block",
+                            "optional": True,
+                            "label": {
+                                "type": "plain_text",
+                                "text": "Optional prompt"
+                            },
+                            "element": {
+                                "type": "plain_text_input",
+                                "action_id": "prompt_input",
+                                "placeholder": {
+                                    "type": "plain_text",
+                                    "text": "Enter a prompt to guide the recreation (optional)"
+                                }
+                            }
+                        }
+                    ]
                 }
-            ]
+            )
+            return
+        else:
+            # Handle regular text-to-image generation
+            prompt = ' '.join(parts[1:])
             
-            # Add each image as a separate message block
-            for i, (image_url, enhanced_prompt) in enumerate(result, 1):
-                blocks.extend([
+            # Tell user we're working on it
+            initial_response = respond({
+                "text": f"Working on generating images using {service}...\nThis might take a few minutes, especially for Midjourney with upscaling.",
+                "response_type": "ephemeral"
+            })
+            
+            # Generate images based on selected service
+            result = generate_midjourney_image(prompt) if service == 'midjourney' else generate_ideogram_image(prompt)
+            
+            if result:
+                # Create blocks for each image
+                blocks = [
                     {
-                        "type": "divider"
+                        "type": "header",
+                        "text": {
+                            "type": "plain_text",
+                            "text": f"🎨 Generated {len(result)} images using {service.title()}",
+                            "emoji": True
+                        }
                     },
                     {
                         "type": "section",
                         "text": {
                             "type": "mrkdwn",
-                            "text": f"*Image {i} of {len(result)}*\n```{enhanced_prompt}```"
+                            "text": f"*Original Prompt:*\n```{prompt}```"
                         }
-                    },
-                    {
-                        "type": "image",
-                        "title": {
-                            "type": "plain_text",
-                            "text": f"Generated Image {i}"
-                        },
-                        "image_url": image_url,
-                        "alt_text": f"AI generated image {i}"
-                    },
-                    {
-                        "type": "context",
-                        "elements": [
-                            {
-                                "type": "mrkdwn",
-                                "text": f"🔗 <{image_url}|Click to download image {i}>"
-                            }
-                        ]
                     }
-                ])
-            
-            # Send the response with appropriate visibility
-            response_payload = {
-                "blocks": blocks,
-                "text": f"Generated {len(result)} images using {service.title()}",  # Fallback text
-                "unfurl_links": False,
-                "unfurl_media": False,
-                "response_type": "in_channel" if is_public_channel else "ephemeral",
-                "replace_original": True
-            }
-            
-            # Log channel information
-            logger.info(f"Sending response - Channel ID: {current_channel_id}, Public Channel: {public_channel_id}, Is Public: {is_public_channel}")
-            
-            respond(response_payload)
-            logger.info(f"Successfully sent {len(result)} images to Slack")
-            
-        else:
-            error_msg = f"Sorry, I couldn't generate the images using {service}. Please try again."
-            logger.error(error_msg)
-            respond({
-                "text": error_msg,
-                "response_type": "ephemeral",
-                "replace_original": True
-            })
+                ]
+                
+                # Add each image as a separate message block
+                for i, (image_url, enhanced_prompt) in enumerate(result, 1):
+                    blocks.extend([
+                        {
+                            "type": "divider"
+                        },
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*Image {i} of {len(result)}*\n```{enhanced_prompt}```"
+                            }
+                        },
+                        {
+                            "type": "image",
+                            "title": {
+                                "type": "plain_text",
+                                "text": f"Generated Image {i}"
+                            },
+                            "image_url": image_url,
+                            "alt_text": f"AI generated image {i}"
+                        },
+                        {
+                            "type": "context",
+                            "elements": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f"🔗 <{image_url}|Click to download image {i}>"
+                                }
+                            ]
+                        }
+                    ])
+                
+                # Send the response with appropriate visibility
+                response_payload = {
+                    "blocks": blocks,
+                    "text": f"Generated {len(result)} images using {service.title()}",  # Fallback text
+                    "unfurl_links": False,
+                    "unfurl_media": False,
+                    "response_type": "in_channel" if is_public else "ephemeral",
+                    "replace_original": True
+                }
+                
+                # Log channel information
+                logger.info(f"Sending response - Channel ID: {current_channel_id}, Public Channel: {public_channel_id}, Is Public: {is_public}")
+                
+                respond(response_payload)
+                logger.info(f"Successfully sent {len(result)} images to Slack")
+                
+            else:
+                error_msg = f"Sorry, I couldn't generate the images using {service}. Please try again."
+                logger.error(error_msg)
+                respond({
+                    "text": error_msg,
+                    "response_type": "ephemeral",
+                    "replace_original": True
+                })
             
     except Exception as e:
         error_msg = f"Error: {str(e)}"
         logger.error(error_msg)
         respond({
             "text": "An unexpected error occurred. Please try again or contact support if the problem persists.",
-            "response_type": "ephemeral",
-            "replace_original": True
+            "response_type": "ephemeral"
         })
+
+@app.view("image_upload_modal")
+def handle_image_upload_submission(ack, body, view, client):
+    """
+    Handle the submission of the image upload modal
+    """
+    ack()
+    
+    try:
+        # Get the uploaded file and prompt
+        files = view["state"]["values"]["image_block"]["image_input"]["files"]
+        prompt = view["state"]["values"]["prompt_block"]["prompt_input"]["value"]
+        user_id = body["user"]["id"]
+        
+        if not files:
+            client.chat_postEphemeral(
+                channel=user_id,
+                user=user_id,
+                text="⚠️ No image was uploaded. Please try again with an image."
+            )
+            return
+
+        # Get file info and download URL
+        file_id = files[0]
+        file_info = client.files_info(file=file_id)
+        
+        if not file_info or 'file' not in file_info:
+            raise Exception("Failed to get file information from Slack")
+            
+        file_url = file_info["file"]["url_private"]
+        
+        # Download the file using Slack's API token for authentication
+        headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
+        file_response = requests.get(file_url, headers=headers)
+        
+        if file_response.status_code != 200:
+            raise Exception(f"Failed to download file from Slack. Status code: {file_response.status_code}")
+
+        # Create a temporary file to store the image
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+            temp_file.write(file_response.content)
+            temp_file_path = temp_file.name
+
+        try:
+            # Upload the image to storage
+            public_url = upload_to_storage(temp_file_path)
+            
+            # Start the generation process
+            client.chat_postEphemeral(
+                channel=user_id,
+                user=user_id,
+                text="🎨 Starting image recreation... This may take a few moments."
+            )
+            
+            # Generate the recreation
+            result = generate_ideogram_recreation(public_url, prompt)
+            
+            if result:
+                # Get channel IDs for visibility
+                public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
+                
+                # Send results
+                for i, (image_url, enhanced_prompt) in enumerate(result, 1):
+                    blocks = [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*Recreation {i} of {len(result)}*\n```{enhanced_prompt}```"
+                            }
+                        },
+                        {
+                            "type": "image",
+                            "title": {
+                                "type": "plain_text",
+                                "text": f"Generated Image {i}"
+                            },
+                            "image_url": image_url,
+                            "alt_text": f"AI generated image {i}"
+                        },
+                        {
+                            "type": "context",
+                            "elements": [
+                                {
+                                    "type": "mrkdwn",
+                                    "text": f"🔗 <{image_url}|Click to download image {i}>"
+                                }
+                            ]
+                        }
+                    ]
+                    
+                    # Send to appropriate channel
+                    target_channel = public_channel_id if public_channel_id else user_id
+                    client.chat_postMessage(
+                        channel=target_channel,
+                        blocks=blocks,
+                        text=f"Generated recreation {i} of {len(result)}",
+                        unfurl_links=False,
+                        unfurl_media=False
+                    )
+                
+                logger.info(f"Successfully sent {len(result)} recreated images to Slack")
+                
+            else:
+                client.chat_postEphemeral(
+                    channel=user_id,
+                    user=user_id,
+                    text="❌ Failed to generate recreations. Please try again with a different image or prompt."
+                )
+                
+        finally:
+            # Clean up the temporary file
+            try:
+                os.unlink(temp_file_path)
+            except Exception as e:
+                logger.error(f"Failed to delete temporary file: {str(e)}")
+            
+    except Exception as e:
+        logger.error(f"Error in image upload submission: {str(e)}")
+        error_message = "An error occurred while processing your request. "
+        if "Failed to download file" in str(e):
+            error_message += "Could not access the uploaded file. "
+        elif "Failed to get file information" in str(e):
+            error_message += "Could not get file information from Slack. "
+        error_message += "Please try again or contact support if the problem persists."
+        
+        client.chat_postEphemeral(
+            channel=body["user"]["id"],
+            user=body["user"]["id"],
+            text=f"❌ {error_message}"
+        )
 
 def run_slack_app():
     handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
