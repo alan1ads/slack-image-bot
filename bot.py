@@ -354,49 +354,55 @@ def generate_ideogram_image(prompt, num_images=5):
         logger.error(f"Error generating image: {str(e)}")
         return None
 
-def generate_ideogram_recreation(image_url, prompt=None, num_images=4):
+def generate_ideogram_recreation(image_url, prompt=None):
     """
-    Generate Ideogram images based on an uploaded image
+    Generate recreations of an image using Ideogram API
     """
-    logger.info(f"Generating Ideogram recreation from image: {image_url}")
-    logger.info(f"With prompt: {prompt if prompt else 'No prompt provided'}")
-    
-    api_key = os.getenv("IDEOGRAM_API_KEY")
+    api_key = os.environ.get('IDEOGRAM_API_KEY')
     if not api_key:
-        logger.error("IDEOGRAM_API_KEY is not set")
+        logger.error("Ideogram API key not found in environment variables")
         return None
-        
+
+    num_images = 4  # Number of recreations to generate
+    
     headers = {
         'Api-Key': api_key,
-        'Content-Type': 'application/json'
+        'Accept': 'application/json'
     }
     
-    data = {
-        'image_recreation_request': {
-            'image_url': image_url,
-            'model': 'V_2',  # Using latest model
-            'num_images': num_images
-        }
-    }
-    
-    # Add optional prompt if provided
-    if prompt:
-        data['image_recreation_request']['prompt'] = prompt
-    
+    # Download the image from the URL first
     try:
+        image_response = requests.get(image_url)
+        if image_response.status_code != 200:
+            logger.error(f"Failed to download image from URL: {image_url}")
+            return None
+            
+        # Create the multipart form data
+        files = {
+            'image_file': ('image.png', image_response.content, 'image/png')
+        }
+        
+        data = {
+            'prompt': prompt if prompt else "Recreate this image",
+            'model': 'V_2',
+            'num_images': str(num_images),
+            'magic_prompt_option': 'AUTO'
+        }
+        
         logger.info(f"Making request to Ideogram API for {num_images} recreations...")
-        logger.debug(f"Request data: {data}")
+        logger.info(f"Request URL: https://api.ideogram.ai/api/v1/generate")
+        logger.info(f"Request data: {json.dumps(data, indent=2)}")
         
-        session = requests.Session()
-        session.request = functools.partial(session.request, timeout=None)
-        
-        response = session.post(
-            'https://api.ideogram.ai/recreation',
+        response = requests.post(
+            'https://api.ideogram.ai/api/v1/generate',
             headers=headers,
-            json=data
+            data=data,
+            files=files,
+            timeout=None
         )
         
         logger.info(f"Received response from Ideogram API. Status code: {response.status_code}")
+        logger.info(f"Response content: {response.text}")
         
         if response.status_code != 200:
             logger.error(f"Ideogram API error. Status code: {response.status_code}")
