@@ -655,10 +655,11 @@ def handle_image_upload_submission(ack, body, view, client):
         user_id = body["user"]["id"]
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"]["value"]
         
-        # Get file from the input
-        file_input = view["state"]["values"]["image_block"]["file_input"]
-        
-        if not file_input or "files" not in file_input:
+        # Get file from the input - using the correct key structure
+        try:
+            file_input = view["state"]["values"]["image_block"]["file_input"]["files"][0]
+        except KeyError:
+            logger.error(f"File input structure: {json.dumps(view['state']['values'], indent=2)}")
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
@@ -666,8 +667,6 @@ def handle_image_upload_submission(ack, body, view, client):
             )
             return
             
-        file_id = file_input["files"][0]
-        
         # Send initial status
         client.chat_postEphemeral(
             channel=user_id,
@@ -683,7 +682,7 @@ def handle_image_upload_submission(ack, body, view, client):
             try:
                 # Add delay before trying to access file
                 time.sleep(2)
-                response = client.files_info(file=file_id)
+                response = client.files_info(file=file_input)
                 if response["ok"]:
                     file_info = response["file"]
                     break
@@ -691,6 +690,7 @@ def handle_image_upload_submission(ack, body, view, client):
                 logger.error(f"Attempt {i+1} failed: {str(e)}")
                 if i == max_retries - 1:
                     raise
+                time.sleep(2)
         
         if not file_info:
             raise Exception("Could not access file information")
