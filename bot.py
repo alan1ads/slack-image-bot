@@ -666,11 +666,11 @@ def handle_image_upload_submission(ack, body, view, client):
     
     try:
         # Get the uploaded file and prompt
-        files = view["state"]["values"]["image_block"]["image_input"]["files"]
+        image_block = view["state"]["values"]["image_block"]["image_input"]
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"]["value"]
         user_id = body["user"]["id"]
         
-        if not files:
+        if "files" not in image_block:
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
@@ -678,115 +678,121 @@ def handle_image_upload_submission(ack, body, view, client):
             )
             return
 
-        # Get file info and download URL
-        file_id = files[0]
-        file_info = client.files_info(file=file_id)
+        # Get file info
+        file_id = image_block["files"][0]
         
-        if not file_info or 'file' not in file_info:
-            raise Exception("Failed to get file information from Slack")
-            
-        file_url = file_info["file"]["url_private"]
-        
-        # Download the file using Slack's API token for authentication
-        headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
-        file_response = requests.get(file_url, headers=headers)
-        
-        if file_response.status_code != 200:
-            raise Exception(f"Failed to download file from Slack. Status code: {file_response.status_code}")
-
-        # Create a temporary file to store the image
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
-            temp_file.write(file_response.content)
-            temp_file_path = temp_file.name
-
         try:
-            # Upload the image to storage
-            public_url = upload_to_storage(temp_file_path)
-            
-            # Start the generation process
-            client.chat_postEphemeral(
-                channel=user_id,
-                user=user_id,
-                text="🎨 Starting image recreation... This may take a few moments."
-            )
-            
-            # Generate the recreation
-            result = generate_ideogram_recreation(public_url, prompt)
-            
-            if result:
-                # Get channel IDs for visibility
-                public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
+            # Get file info using files.info
+            file_info = client.files_info(file=file_id)
+            if not file_info or 'file' not in file_info:
+                raise Exception("Failed to get file information")
                 
-                # Send results
-                for i, (image_url, enhanced_prompt) in enumerate(result, 1):
-                    blocks = [
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"*Recreation {i} of {len(result)}*\n```{enhanced_prompt}```"
-                            }
-                        },
-                        {
-                            "type": "image",
-                            "title": {
-                                "type": "plain_text",
-                                "text": f"Generated Image {i}"
-                            },
-                            "image_url": image_url,
-                            "alt_text": f"AI generated image {i}"
-                        },
-                        {
-                            "type": "context",
-                            "elements": [
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"🔗 <{image_url}|Click to download image {i}>"
-                                }
-                            ]
-                        }
-                    ]
-                    
-                    # Send to appropriate channel
-                    target_channel = public_channel_id if public_channel_id else user_id
-                    client.chat_postMessage(
-                        channel=target_channel,
-                        blocks=blocks,
-                        text=f"Generated recreation {i} of {len(result)}",
-                        unfurl_links=False,
-                        unfurl_media=False
-                    )
+            file_url = file_info["file"]["url_private"]
+            
+            # Download the file using Slack's API token for authentication
+            headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
+            file_response = requests.get(file_url, headers=headers)
+            
+            if file_response.status_code != 200:
+                raise Exception(f"Failed to download file. Status code: {file_response.status_code}")
+
+            # Create a temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+                temp_file.write(file_response.content)
+                temp_file_path = temp_file.name
+
+            try:
+                # Upload to storage and get public URL
+                public_url = upload_to_storage(temp_file_path)
                 
-                logger.info(f"Successfully sent {len(result)} recreated images to Slack")
-                
-            else:
+                # Notify user
                 client.chat_postEphemeral(
                     channel=user_id,
                     user=user_id,
-                    text="❌ Failed to generate recreations. Please try again with a different image or prompt."
+                    text="🎨 Starting image recreation... This may take a few moments."
                 )
                 
-        finally:
-            # Clean up the temporary file
-            try:
-                os.unlink(temp_file_path)
-            except Exception as e:
-                logger.error(f"Failed to delete temporary file: {str(e)}")
+                # Generate recreations
+                result = generate_ideogram_recreation(public_url, prompt)
+                
+                if result:
+                    # Get public channel ID
+                    public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
+                    target_channel = public_channel_id if public_channel_id else user_id
+                    
+                    # Send each result
+                    for i, (image_url, enhanced_prompt) in enumerate(result, 1):
+                        blocks = [
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f"*Recreation {i} of {len(result)}*\n```{enhanced_prompt}```"
+                                }
+                            },
+                            {
+                                "type": "image",
+                                "title": {
+                                    "type": "plain_text",
+                                    "text": f"Generated Image {i}"
+                                },
+                                "image_url": image_url,
+                                "alt_text": f"AI generated image {i}"
+                            },
+                            {
+                                "type": "context",
+                                "elements": [
+                                    {
+                                        "type": "mrkdwn",
+                                        "text": f"🔗 <{image_url}|Download image {i}>"
+                                    }
+                                ]
+                            }
+                        ]
+                        
+                        client.chat_postMessage(
+                            channel=target_channel,
+                            blocks=blocks,
+                            text=f"Generated recreation {i} of {len(result)}",
+                            unfurl_links=False,
+                            unfurl_media=False
+                        )
+                        
+                        # Small delay between messages
+                        time.sleep(1)
+                    
+                    logger.info(f"Successfully sent {len(result)} recreated images")
+                    
+                else:
+                    client.chat_postEphemeral(
+                        channel=user_id,
+                        user=user_id,
+                        text="❌ Failed to generate recreations. Please try again."
+                    )
+                    
+            finally:
+                # Clean up temporary file
+                try:
+                    os.unlink(temp_file_path)
+                except Exception as e:
+                    logger.error(f"Failed to delete temporary file: {str(e)}")
+                    
+        except Exception as e:
+            logger.error(f"File handling error: {str(e)}")
+            client.chat_postEphemeral(
+                channel=user_id,
+                user=user_id,
+                text="❌ Failed to process the uploaded file. Please try again."
+            )
             
     except Exception as e:
         logger.error(f"Error in image upload submission: {str(e)}")
-        error_message = "An error occurred while processing your request. "
-        if "Failed to download file" in str(e):
-            error_message += "Could not access the uploaded file. "
-        elif "Failed to get file information" in str(e):
-            error_message += "Could not get file information from Slack. "
-        error_message += "Please try again or contact support if the problem persists."
-        
-        client.chat_postEphemeral(
-            channel=body["user"]["id"],
-            user=body["user"]["id"],
-            text=f"❌ {error_message}"
-        )
+        if body and "user" in body:
+            client.chat_postEphemeral(
+                channel=body["user"]["id"],
+                user=body["user"]["id"],
+                text="❌ An error occurred. Please try again or contact support."
+            )
 
 def run_slack_app():
     handler = SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"])
