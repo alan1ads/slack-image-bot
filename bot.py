@@ -645,10 +645,16 @@ def handle_recreation_submission(ack, body, view, client):
             file_data = view["state"]["values"]["image_block"]["file_input"]["files"][0]
             logger.info(f"Received file data: {file_data}")
             
-            # Get file info directly from the files array
-            file_url = f"https://files.slack.com/files-pri/{body['team']['id']}-{file_data}"
+            # First, get the file info
+            file_info_response = client.files_info(file=file_data)
+            logger.info(f"File info response: {json.dumps(file_info_response, indent=2)}")
             
-        except (KeyError, IndexError) as e:
+            if not file_info_response['ok']:
+                raise Exception(f"Failed to get file info: {file_info_response.get('error')}")
+            
+            file_url = file_info_response['file']['url_private']
+            
+        except Exception as e:
             logger.error(f"Error accessing file data: {str(e)}")
             client.chat_postEphemeral(
                 channel=user_id,
