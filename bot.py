@@ -661,20 +661,13 @@ def handle_image_upload_submission(ack, body, view, client):
         user_id = body["user"]["id"]
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"]["value"]
         
-        # Debug logging
-        logger.info("View submission received:")
-        logger.info(f"Body content: {json.dumps(body, indent=2)}")
-        logger.info(f"View content: {json.dumps(view, indent=2)}")
-        
         # Get file from the input
         try:
             image_block = view["state"]["values"]["image_block"]
-            logger.info(f"Image block content: {json.dumps(image_block, indent=2)}")
             
             # Check for file input
             for key in image_block:
                 file_data = image_block[key]
-                logger.info(f"Checking key {key}: {json.dumps(file_data, indent=2)}")
                 if isinstance(file_data, dict) and "files" in file_data:
                     files = file_data["files"]
                     break
@@ -685,7 +678,6 @@ def handle_image_upload_submission(ack, body, view, client):
                 raise ValueError("No files uploaded")
                 
             file_data = files[0]
-            logger.info(f"File data: {json.dumps(file_data, indent=2)}")
             
         except Exception as e:
             logger.error(f"Error accessing file data: {str(e)}")
@@ -706,11 +698,9 @@ def handle_image_upload_submission(ack, body, view, client):
         try:
             # Try to get the file URL directly
             if isinstance(file_data, str):
-                # If it's just the ID, construct the URL
                 file_id = file_data
                 file_url = f"https://files.slack.com/files-pri/{body['team']['id']}/{file_id}"
             else:
-                # If it's an object, try to get the URL
                 file_url = file_data.get("url_private", "")
                 if not file_url:
                     raise ValueError("No file URL found")
@@ -722,70 +712,99 @@ def handle_image_upload_submission(ack, body, view, client):
             if response.status_code != 200:
                 raise Exception(f"Failed to download file: {response.status_code}")
                 
-            # Save to temp file
+            # Save to temp file and process directly
             with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
                 temp_file.write(response.content)
                 temp_path = temp_file.name
                 
-            try:
-                # Upload to storage
-                public_url = upload_to_storage(temp_path)
-                
-                # Update status
-                client.chat_postEphemeral(
-                    channel=user_id,
-                    user=user_id,
-                    text="🎨 Generating recreations..."
-                )
-                
-                # Generate recreations
-                result = generate_ideogram_recreation(public_url, prompt)
-                
-                if result:
-                    # Send results
-                    public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
-                    target_channel = public_channel_id if public_channel_id else user_id
-                    
-                    for i, (image_url, enhanced_prompt) in enumerate(result, 1):
-                        blocks = [
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": f"*Recreation {i}/{len(result)}*\n{enhanced_prompt}"
-                                }
-                            },
-                            {
-                                "type": "image",
-                                "title": {
-                                    "type": "plain_text",
-                                    "text": "Generated Image"
-                                },
-                                "image_url": image_url,
-                                "alt_text": "AI generated image"
-                            }
-                        ]
-                        
-                        client.chat_postMessage(
-                            channel=target_channel,
-                            blocks=blocks,
-                            text=f"Generated recreation {i}/{len(result)}"
-                        )
-                        time.sleep(1)
-                else:
-                    client.chat_postEphemeral(
-                        channel=user_id,
-                        user=user_id,
-                        text="❌ Failed to generate recreations. Please try again."
-                    )
-                    
-            finally:
-                # Cleanup
                 try:
-                    os.unlink(temp_path)
-                except Exception as e:
-                    logger.error(f"Failed to delete temp file: {str(e)}")
-                
+                    # Generate recreations directly from the temp file
+                    with open(temp_path, 'rb') as image_file:
+                        # Update status
+                        client.chat_postEphemeral(
+                            channel=user_id,
+                            user=user_id,
+                            text="🎨 Generating recreations..."
+                        )
+                        
+                        # Create the multipart form data
+                        files = {
+                            'image_file': ('image.png', image_file, 'image/png')
+                        }
+                        
+                        data = {
+                            'prompt': prompt if prompt else "Recreate this image",
+                            'model': 'V_2',
+                            'num_images': '4',
+                            'magic_prompt_option': 'AUTO'
+                        }
+                        
+                        # Make request to Ideogram API
+                        ideogram_headers = {
+                            'Api-Key': os.environ.get('IDEOGRAM_API_KEY'),
+                            'Accept': 'application/json'
+                        }
+                        
+                        ideogram_response = requests.post(
+                            'https://api.ideogram.ai/api/v1/generate',
+                            headers=ideogram_headers,
+                            data=data,
+                            files=files,
+                            timeout=None
+                        )
+                        
+                        if ideogram_response.status_code != 200:
+                            logger.error(f"Ideogram API error. Status code: {ideogram_response.status_code}")
+                            logger.error(f"Response content: {ideogram_response.text}")
+                            raise Exception("Failed to generate recreations")
+                            
+                        result_data = ideogram_response.json()
+                        
+                        if 'data' in result_data and result_data['data']:
+                            # Send results
+                            public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
+                            target_channel = public_channel_id if public_channel_id else user_id
+                            
+                            for i, image_info in enumerate(result_data['data'], 1):
+                                if 'url' in image_info:
+                                    image_url = image_info['url']
+                                    image_prompt = image_info.get('prompt', prompt if prompt else "Image recreation")
+                                    
+                                    blocks = [
+                                        {
+                                            "type": "section",
+                                            "text": {
+                                                "type": "mrkdwn",
+                                                "text": f"*Recreation {i}/4*\n{image_prompt}"
+                                            }
+                                        },
+                                        {
+                                            "type": "image",
+                                            "title": {
+                                                "type": "plain_text",
+                                                "text": "Generated Image"
+                                            },
+                                            "image_url": image_url,
+                                            "alt_text": "AI generated image"
+                                        }
+                                    ]
+                                    
+                                    client.chat_postMessage(
+                                        channel=target_channel,
+                                        blocks=blocks,
+                                        text=f"Generated recreation {i}/4"
+                                    )
+                                    time.sleep(1)
+                        else:
+                            raise Exception("No image data in response")
+                            
+                finally:
+                    # Cleanup
+                    try:
+                        os.unlink(temp_path)
+                    except Exception as e:
+                        logger.error(f"Failed to delete temp file: {str(e)}")
+                        
         except Exception as e:
             logger.error(f"Error processing file: {str(e)}")
             client.chat_postEphemeral(
