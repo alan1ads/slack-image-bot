@@ -643,6 +643,10 @@ def handle_recreation_submission(ack, body, view, client):
         # Get file from the input
         try:
             file_data = view["state"]["values"]["image_block"]["file_input"]["files"][0]
+            logger.info(f"Received file data: {file_data}")
+            
+            # Get file info directly from the files array
+            file_url = f"https://files.slack.com/files-pri/{body['team']['id']}-{file_data}"
             
         except (KeyError, IndexError) as e:
             logger.error(f"Error accessing file data: {str(e)}")
@@ -661,15 +665,12 @@ def handle_recreation_submission(ack, body, view, client):
         )
         
         try:
-            # Get the file URL and download it
-            file_info = client.files_info(file=file_data)
-            file_url = file_info["file"]["url_private"]
-            
             # Download file with proper authorization
             headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
             response = requests.get(file_url, headers=headers)
             
             if response.status_code != 200:
+                logger.error(f"Failed to download file: {response.status_code}")
                 raise Exception(f"Failed to download file: {response.status_code}")
             
             # Get the image content
@@ -682,90 +683,82 @@ def handle_recreation_submission(ack, body, view, client):
                 text="🎨 Generating recreations... This may take a minute."
             )
             
-            # Generate recreations using Ideogram
-            result = generate_ideogram_recreation(image_content, prompt)
+            # Prepare the request to Ideogram API
+            files = {
+                'image_file': ('image.png', image_content, 'image/png')
+            }
             
-            if not result:
-                raise Exception("Failed to generate recreations")
+            # Prepare the request data
+            data = {
+                'prompt': prompt if prompt else "Recreate this image with creative variations",
+                'model': 'V_2',
+                'num_images': '4',
+                'magic_prompt_option': 'AUTO'
+            }
             
-            # Get public channel ID and determine where to post
-            public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
-            target_channel = public_channel_id if public_channel_id else user_id
-            is_public = bool(public_channel_id)
+            # Make request to Ideogram API
+            ideogram_headers = {
+                'Api-Key': os.environ.get('IDEOGRAM_API_KEY'),
+                'Accept': 'application/json'
+            }
             
-            # Create and send message blocks for results
-            blocks = [
-                {
-                    "type": "header",
-                    "text": {
-                        "type": "plain_text",
-                        "text": "🎨 Image Recreation Results",
-                        "emoji": True
-                    }
-                }
-            ]
+            logger.info("Making request to Ideogram API...")
+            logger.info(f"Request data: {json.dumps(data, indent=2)}")
             
-            if prompt:
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*📝 Recreation Prompt:*\n```{prompt}```"
-                    }
-                })
-            
-            blocks.append({"type": "divider"})
-            
-            # Add each recreation result
-            for i, (image_url, enhanced_prompt) in enumerate(result, 1):
-                blocks.extend([
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"*✨ Recreation {i} Enhanced Prompt:*\n```{enhanced_prompt}```"
-                        }
-                    },
-                    {
-                        "type": "image",
-                        "title": {
-                            "type": "plain_text",
-                            "text": f"Recreation {i}"
-                        },
-                        "image_url": image_url,
-                        "alt_text": f"AI recreation {i}"
-                    },
-                    {
-                        "type": "context",
-                        "elements": [
-                            {
-                                "type": "mrkdwn",
-                                "text": f"🔗 <{image_url}|Click to download recreation {i}>"
-                            }
-                        ]
-                    }
-                ])
-                
-                if i < len(result):
-                    blocks.append({"type": "divider"})
-            
-            # Send the results
-            client.chat_postMessage(
-                channel=target_channel,
-                blocks=blocks,
-                text="Image Recreation Results",
-                unfurl_links=False,
-                unfurl_media=False
+            ideogram_response = requests.post(
+                'https://api.ideogram.ai/api/v1/generate',
+                headers=ideogram_headers,
+                data=data,
+                files=files,
+                timeout=None
             )
             
-            # If sent to public channel, notify user
-            if is_public:
-                client.chat_postEphemeral(
-                    channel=user_id,
-                    user=user_id,
-                    text="✅ Recreation results have been posted in the public channel!"
-                )
+            logger.info(f"Ideogram API response status: {ideogram_response.status_code}")
+            logger.info(f"Response content: {ideogram_response.text}")
             
+            if ideogram_response.status_code != 200:
+                raise Exception(f"Failed to generate recreations: {ideogram_response.text}")
+            
+            result_data = ideogram_response.json()
+            
+            if 'data' in result_data and result_data['data']:
+                # Send results
+                public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
+                target_channel = public_channel_id if public_channel_id else user_id
+                
+                for i, image_info in enumerate(result_data['data'], 1):
+                    if 'url' in image_info:
+                        image_url = image_info['url']
+                        image_prompt = image_info.get('prompt', prompt if prompt else "Image recreation")
+                        
+                        blocks = [
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f"*Recreation {i}/4*\n{image_prompt}"
+                                }
+                            },
+                            {
+                                "type": "image",
+                                "title": {
+                                    "type": "plain_text",
+                                    "text": "Generated Image"
+                                },
+                                "image_url": image_url,
+                                "alt_text": "AI generated image"
+                            }
+                        ]
+                        
+                        client.chat_postMessage(
+                            channel=target_channel,
+                            blocks=blocks,
+                            text=f"Generated recreation {i}/4"
+                        )
+                        time.sleep(1)
+            else:
+                raise Exception("No image data in response")
+                
         except Exception as e:
             logger.error(f"Error processing recreation: {str(e)}")
             client.chat_postEphemeral(
