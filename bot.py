@@ -655,15 +655,38 @@ def handle_image_upload_submission(ack, body, view, client):
         user_id = body["user"]["id"]
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"]["value"]
         
-        # Get file from the input - using the correct key structure
+        # Debug logging
+        logger.info("View state values:")
+        logger.info(json.dumps(view["state"]["values"], indent=2))
+        
+        # Get file from the input
         try:
-            file_input = view["state"]["values"]["image_block"]["file_input"]["files"][0]
-        except KeyError:
-            logger.error(f"File input structure: {json.dumps(view['state']['values'], indent=2)}")
+            image_block = view["state"]["values"]["image_block"]
+            logger.info(f"Image block content: {json.dumps(image_block, indent=2)}")
+            
+            # Try different possible keys
+            if "image_input" in image_block:
+                file_input = image_block["image_input"]
+            elif "file_input" in image_block:
+                file_input = image_block["file_input"]
+            else:
+                logger.error(f"Available keys in image_block: {list(image_block.keys())}")
+                raise KeyError("Could not find file input key")
+            
+            logger.info(f"File input content: {json.dumps(file_input, indent=2)}")
+            
+            if "files" not in file_input:
+                raise KeyError("No files in file input")
+                
+            file_id = file_input["files"][0]
+            logger.info(f"File ID: {file_id}")
+            
+        except Exception as e:
+            logger.error(f"Error accessing file input: {str(e)}")
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
-                text="⚠️ No image was uploaded. Please try again."
+                text="⚠️ Could not access the uploaded file. Please try again."
             )
             return
             
@@ -680,20 +703,28 @@ def handle_image_upload_submission(ack, body, view, client):
         
         for i in range(max_retries):
             try:
-                # Add delay before trying to access file
-                time.sleep(2)
-                response = client.files_info(file=file_input)
-                if response["ok"]:
+                # Add longer delay before trying to access file
+                time.sleep(3 * (i + 1))  # Increasing delay with each retry
+                
+                logger.info(f"Attempting to get file info (attempt {i + 1}/{max_retries})")
+                response = client.files_info(file=file_id)
+                
+                logger.info(f"Files.info response: {json.dumps(response, indent=2)}")
+                
+                if response.get("ok"):
                     file_info = response["file"]
+                    logger.info("Successfully retrieved file info")
                     break
+                else:
+                    logger.error(f"Failed to get file info: {response.get('error')}")
+                    
             except Exception as e:
                 logger.error(f"Attempt {i+1} failed: {str(e)}")
                 if i == max_retries - 1:
                     raise
-                time.sleep(2)
         
         if not file_info:
-            raise Exception("Could not access file information")
+            raise Exception("Could not access file information after multiple attempts")
             
         # Download file
         url_private = file_info["url_private"]
