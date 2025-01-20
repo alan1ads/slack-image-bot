@@ -656,33 +656,33 @@ def handle_image_upload_submission(ack, body, view, client):
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"]["value"]
         
         # Debug logging
-        logger.info("View state values:")
-        logger.info(json.dumps(view["state"]["values"], indent=2))
+        logger.info("View submission received:")
+        logger.info(f"Body content: {json.dumps(body, indent=2)}")
+        logger.info(f"View content: {json.dumps(view, indent=2)}")
         
         # Get file from the input
         try:
             image_block = view["state"]["values"]["image_block"]
             logger.info(f"Image block content: {json.dumps(image_block, indent=2)}")
             
-            # Try different possible keys
-            if "image_input" in image_block:
-                file_input = image_block["image_input"]
-            elif "file_input" in image_block:
-                file_input = image_block["file_input"]
+            # Check for file input
+            for key in image_block:
+                file_data = image_block[key]
+                logger.info(f"Checking key {key}: {json.dumps(file_data, indent=2)}")
+                if isinstance(file_data, dict) and "files" in file_data:
+                    files = file_data["files"]
+                    break
             else:
-                logger.error(f"Available keys in image_block: {list(image_block.keys())}")
-                raise KeyError("Could not find file input key")
+                raise KeyError("No files found in any input")
             
-            logger.info(f"File input content: {json.dumps(file_input, indent=2)}")
-            
-            if "files" not in file_input:
-                raise KeyError("No files in file input")
+            if not files:
+                raise ValueError("No files uploaded")
                 
-            file_id = file_input["files"][0]
-            logger.info(f"File ID: {file_id}")
+            file_data = files[0]
+            logger.info(f"File data: {json.dumps(file_data, indent=2)}")
             
         except Exception as e:
-            logger.error(f"Error accessing file input: {str(e)}")
+            logger.error(f"Error accessing file data: {str(e)}")
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
@@ -697,109 +697,99 @@ def handle_image_upload_submission(ack, body, view, client):
             text="🔄 Processing your request..."
         )
         
-        # Get file info with retries
-        max_retries = 3
-        file_info = None
-        
-        for i in range(max_retries):
-            try:
-                # Add longer delay before trying to access file
-                time.sleep(3 * (i + 1))  # Increasing delay with each retry
-                
-                logger.info(f"Attempting to get file info (attempt {i + 1}/{max_retries})")
-                response = client.files_info(file=file_id)
-                
-                logger.info(f"Files.info response: {json.dumps(response, indent=2)}")
-                
-                if response.get("ok"):
-                    file_info = response["file"]
-                    logger.info("Successfully retrieved file info")
-                    break
-                else:
-                    logger.error(f"Failed to get file info: {response.get('error')}")
-                    
-            except Exception as e:
-                logger.error(f"Attempt {i+1} failed: {str(e)}")
-                if i == max_retries - 1:
-                    raise
-        
-        if not file_info:
-            raise Exception("Could not access file information after multiple attempts")
-            
-        # Download file
-        url_private = file_info["url_private"]
-        headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
-        
-        response = requests.get(url_private, headers=headers)
-        if response.status_code != 200:
-            raise Exception(f"Failed to download file: {response.status_code}")
-            
-        # Save to temp file
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
-            temp_file.write(response.content)
-            temp_path = temp_file.name
-            
         try:
-            # Upload to storage
-            public_url = upload_to_storage(temp_path)
-            
-            # Update status
-            client.chat_postEphemeral(
-                channel=user_id,
-                user=user_id,
-                text="🎨 Generating recreations..."
-            )
-            
-            # Generate recreations
-            result = generate_ideogram_recreation(public_url, prompt)
-            
-            if result:
-                # Send results
-                public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
-                target_channel = public_channel_id if public_channel_id else user_id
-                
-                for i, (image_url, enhanced_prompt) in enumerate(result, 1):
-                    blocks = [
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"*Recreation {i}/{len(result)}*\n{enhanced_prompt}"
-                            }
-                        },
-                        {
-                            "type": "image",
-                            "title": {
-                                "type": "plain_text",
-                                "text": "Generated Image"
-                            },
-                            "image_url": image_url,
-                            "alt_text": "AI generated image"
-                        }
-                    ]
-                    
-                    client.chat_postMessage(
-                        channel=target_channel,
-                        blocks=blocks,
-                        text=f"Generated recreation {i}/{len(result)}"
-                    )
-                    time.sleep(1)
+            # Try to get the file URL directly
+            if isinstance(file_data, str):
+                # If it's just the ID, construct the URL
+                file_id = file_data
+                file_url = f"https://files.slack.com/files-pri/{body['team']['id']}/{file_id}"
             else:
+                # If it's an object, try to get the URL
+                file_url = file_data.get("url_private", "")
+                if not file_url:
+                    raise ValueError("No file URL found")
+            
+            # Download file
+            headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
+            response = requests.get(file_url, headers=headers)
+            
+            if response.status_code != 200:
+                raise Exception(f"Failed to download file: {response.status_code}")
+                
+            # Save to temp file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+                temp_file.write(response.content)
+                temp_path = temp_file.name
+                
+            try:
+                # Upload to storage
+                public_url = upload_to_storage(temp_path)
+                
+                # Update status
                 client.chat_postEphemeral(
                     channel=user_id,
                     user=user_id,
-                    text="❌ Failed to generate recreations. Please try again."
+                    text="🎨 Generating recreations..."
                 )
                 
-        finally:
-            # Cleanup
-            try:
-                os.unlink(temp_path)
-            except Exception as e:
-                logger.error(f"Failed to delete temp file: {str(e)}")
+                # Generate recreations
+                result = generate_ideogram_recreation(public_url, prompt)
                 
+                if result:
+                    # Send results
+                    public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
+                    target_channel = public_channel_id if public_channel_id else user_id
+                    
+                    for i, (image_url, enhanced_prompt) in enumerate(result, 1):
+                        blocks = [
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f"*Recreation {i}/{len(result)}*\n{enhanced_prompt}"
+                                }
+                            },
+                            {
+                                "type": "image",
+                                "title": {
+                                    "type": "plain_text",
+                                    "text": "Generated Image"
+                                },
+                                "image_url": image_url,
+                                "alt_text": "AI generated image"
+                            }
+                        ]
+                        
+                        client.chat_postMessage(
+                            channel=target_channel,
+                            blocks=blocks,
+                            text=f"Generated recreation {i}/{len(result)}"
+                        )
+                        time.sleep(1)
+                else:
+                    client.chat_postEphemeral(
+                        channel=user_id,
+                        user=user_id,
+                        text="❌ Failed to generate recreations. Please try again."
+                    )
+                    
+            finally:
+                # Cleanup
+                try:
+                    os.unlink(temp_path)
+                except Exception as e:
+                    logger.error(f"Failed to delete temp file: {str(e)}")
+                
+        except Exception as e:
+            logger.error(f"Error processing file: {str(e)}")
+            client.chat_postEphemeral(
+                channel=user_id,
+                user=user_id,
+                text="❌ Failed to process the file. Please try again."
+            )
+            
     except Exception as e:
-        logger.error(f"Error processing upload: {str(e)}")
+        logger.error(f"Error in submission handler: {str(e)}")
         if body and "user" in body:
             client.chat_postEphemeral(
                 channel=body["user"]["id"],
