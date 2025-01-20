@@ -12,6 +12,7 @@ import functools
 import tempfile
 import shutil
 from pathlib import Path
+import traceback
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
@@ -417,7 +418,7 @@ def generate_ideogram_recreation(image_file_content, prompt=None):
         logger.error(f"Error in generate_ideogram_recreation: {str(e)}")
         return None
 @app.command("/generate")
-def handle_generate_command(ack, respond, command, client):
+async def handle_generate_command(ack, respond, command, client):
     """
     Handle the /generate slash command
     """
@@ -461,7 +462,7 @@ def handle_generate_command(ack, respond, command, client):
                         "callback_id": "recreation_upload_modal",
                         "title": {
                             "type": "plain_text",
-                            "text": "Recreate Image",  # Shortened title
+                            "text": "Upload Image",
                             "emoji": True
                         },
                         "submit": {
@@ -469,30 +470,18 @@ def handle_generate_command(ack, respond, command, client):
                             "text": "Generate",
                             "emoji": True
                         },
-                        "close": {
-                            "type": "plain_text",
-                            "text": "Cancel",
-                            "emoji": True
-                        },
                         "blocks": [
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": "Upload an image to create AI-powered variations"
-                                }
-                            },
                             {
                                 "type": "input",
                                 "block_id": "image_block",
                                 "element": {
                                     "type": "file_input",
                                     "action_id": "file_input",
-                                    "filetypes": ["png", "jpg", "jpeg"]
+                                    "filetypes": ["png", "jpg", "jpeg", "webp"]
                                 },
                                 "label": {
                                     "type": "plain_text",
-                                    "text": "Select Image",
+                                    "text": "Upload an image",
                                     "emoji": True
                                 }
                             },
@@ -505,7 +494,7 @@ def handle_generate_command(ack, respond, command, client):
                                     "action_id": "prompt_input",
                                     "placeholder": {
                                         "type": "plain_text",
-                                        "text": "Optional: Guide the recreation style"
+                                        "text": "Optional: Add a prompt to guide the recreation"
                                     }
                                 },
                                 "label": {
@@ -634,32 +623,51 @@ def handle_recreation_submission(ack, body, view, client):
     """
     Handle the submission of the recreation upload modal
     """
+    logger.info(f"Modal callback_id: {view.get('callback_id')}")
     ack()
     
     try:
         user_id = body["user"]["id"]
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
         
+        # Debug logging
+        logger.info("=== Modal Submission Debug ===")
+        logger.info(f"View state: {json.dumps(view['state'], indent=2)}")
+        logger.info(f"Complete view: {json.dumps(view, indent=2)}")
+        logger.info("============================")
+        
         # Get file from the input
         try:
-            file_data = view["state"]["values"]["image_block"]["file_input"]["files"][0]
-            logger.info(f"Received file data: {file_data}")
+            # Get the file input block
+            file_input = view["state"]["values"]["image_block"]["file_input"]
+            logger.info(f"File input data: {json.dumps(file_input, indent=2)}")
             
-            # First, get the file info
-            file_info_response = client.files_info(file=file_data)
-            logger.info(f"File info response: {json.dumps(file_info_response, indent=2)}")
+            if "files" not in file_input or not file_input["files"]:
+                raise ValueError("No files found in submission")
+            
+            file_id = file_input["files"][0]
+            logger.info(f"File ID: {file_id}")
+            
+            # Get file info using files.info
+            file_info_response = client.files_info(
+                file=file_id,
+                token=os.environ['SLACK_BOT_TOKEN']
+            )
             
             if not file_info_response['ok']:
+                logger.error(f"File info error: {file_info_response}")
                 raise Exception(f"Failed to get file info: {file_info_response.get('error')}")
             
             file_url = file_info_response['file']['url_private']
+            logger.info(f"Retrieved file URL: {file_url}")
             
         except Exception as e:
             logger.error(f"Error accessing file data: {str(e)}")
+            logger.error(f"Full error details: {traceback.format_exc()}")
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
-                text="⚠️ No image file was uploaded. Please try again."
+                text="⚠️ Could not access the uploaded file. Please try again."
             )
             return
             
@@ -672,11 +680,18 @@ def handle_recreation_submission(ack, body, view, client):
         
         try:
             # Download file with proper authorization
-            headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
+            headers = {
+                "Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}",
+                "User-Agent": "SlackBot/1.0"
+            }
+            
+            logger.info(f"Attempting to download file with headers: {headers}")
             response = requests.get(file_url, headers=headers)
             
             if response.status_code != 200:
-                logger.error(f"Failed to download file: {response.status_code}")
+                logger.error(f"Download failed with status {response.status_code}")
+                logger.error(f"Response headers: {dict(response.headers)}")
+                logger.error(f"Response content: {response.text}")
                 raise Exception(f"Failed to download file: {response.status_code}")
             
             # Get the image content
@@ -767,6 +782,7 @@ def handle_recreation_submission(ack, body, view, client):
                 
         except Exception as e:
             logger.error(f"Error processing recreation: {str(e)}")
+            logger.error(f"Full error details: {traceback.format_exc()}")
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
@@ -775,6 +791,7 @@ def handle_recreation_submission(ack, body, view, client):
             
     except Exception as e:
         logger.error(f"Error in recreation submission handler: {str(e)}")
+        logger.error(f"Full error details: {traceback.format_exc()}")
         if body and "user" in body:
             client.chat_postEphemeral(
                 channel=body["user"]["id"],
