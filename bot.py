@@ -430,30 +430,23 @@ def upload_to_storage(file_path):
     """
     Upload a file to Render's disk storage and create a temporary URL
     """
+    # Create a directory in Render's writable filesystem if it doesn't exist
+    upload_dir = "/opt/render/project/src/uploads"
+    if not os.path.exists(upload_dir):
+        os.makedirs(upload_dir)
+    
+    # Generate unique filename
+    filename = f"{int(time.time())}_{os.path.basename(file_path)}"
+    destination = os.path.join(upload_dir, filename)
+    
     try:
-        # Create a directory in Render's writable filesystem if it doesn't exist
-        upload_dir = "/opt/render/project/src/uploads"
-        if not os.path.exists(upload_dir):
-            os.makedirs(upload_dir)
-        
-        # Generate unique filename
-        filename = f"{int(time.time())}_{os.path.basename(file_path)}"
-        destination = os.path.join(upload_dir, filename)
-        
         # Copy file to uploads directory
         shutil.copy2(file_path, destination)
         
-        # Get the base URL from environment variable
-        base_url = os.environ.get('RENDER_EXTERNAL_URL', 'http://localhost:8080')
-        
-        # Create and return the public URL
-        public_url = f"{base_url}/uploads/{filename}"
-        logger.info(f"File uploaded successfully. Public URL: {public_url}")
-        
-        return public_url
-        
+        # Return the path that can be used by the application
+        return destination
     except Exception as e:
-        logger.error(f"Failed to upload file to storage: {str(e)}")
+        logger.error(f"Failed to copy file to uploads directory: {str(e)}")
         raise
 
 @app.command("/generate")
@@ -493,70 +486,64 @@ def handle_generate_command(ack, respond, command, client):
 
         if service == 'ideogram-recreation':
             # Open a modal for file upload
-            client.views_open(
-                trigger_id=command["trigger_id"],
-                view={
-                    "type": "modal",
-                    "callback_id": "image_upload_modal",
-                    "title": {
-                        "type": "plain_text",
-                        "text": "Upload Image",  # Shortened title
-                        "emoji": True
-                    },
-                    "submit": {
-                        "type": "plain_text",
-                        "text": "Generate",
-                        "emoji": True
-                    },
-                    "close": {
-                        "type": "plain_text",
-                        "text": "Cancel",
-                        "emoji": True
-                    },
-                    "blocks": [
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": "Upload an image to recreate using Ideogram AI"
-                            }
+            try:
+                client.views_open(
+                    trigger_id=command["trigger_id"],
+                    view={
+                        "type": "modal",
+                        "callback_id": "image_upload_modal",
+                        "title": {
+                            "type": "plain_text",
+                            "text": "Upload Image",
+                            "emoji": True
                         },
-                        {
-                            "type": "input",
-                            "block_id": "image_block",
-                            "label": {
-                                "type": "plain_text",
-                                "text": "Image",
-                                "emoji": True
-                            },
-                            "element": {
-                                "type": "file_input",
-                                "action_id": "image_input",
-                                "filetypes": ["png", "jpg", "jpeg", "gif"]
-                            }
+                        "submit": {
+                            "type": "plain_text",
+                            "text": "Generate",
+                            "emoji": True
                         },
-                        {
-                            "type": "input",
-                            "block_id": "prompt_block",
-                            "optional": True,
-                            "label": {
-                                "type": "plain_text",
-                                "text": "Optional prompt",
-                                "emoji": True
-                            },
-                            "element": {
-                                "type": "plain_text_input",
-                                "action_id": "prompt_input",
-                                "placeholder": {
+                        "blocks": [
+                            {
+                                "type": "input",
+                                "block_id": "image_block",
+                                "element": {
+                                    "type": "file_input",
+                                    "action_id": "file_input",
+                                    "filetypes": ["png", "jpg", "jpeg"]
+                                },
+                                "label": {
                                     "type": "plain_text",
-                                    "text": "Enter a prompt to guide the recreation",
+                                    "text": "Upload an image",
+                                    "emoji": True
+                                }
+                            },
+                            {
+                                "type": "input",
+                                "block_id": "prompt_block",
+                                "optional": True,
+                                "element": {
+                                    "type": "plain_text_input",
+                                    "action_id": "prompt_input",
+                                    "placeholder": {
+                                        "type": "plain_text",
+                                        "text": "Optional: Add a prompt to guide the recreation"
+                                    }
+                                },
+                                "label": {
+                                    "type": "plain_text",
+                                    "text": "Prompt",
                                     "emoji": True
                                 }
                             }
-                        }
-                    ]
-                }
-            )
+                        ]
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error opening modal: {str(e)}")
+                respond({
+                    "text": "Failed to open upload dialog. Please try again.",
+                    "response_type": "ephemeral"
+                })
             return
         else:
             # Handle regular text-to-image generation
@@ -662,158 +649,131 @@ def handle_image_upload_submission(ack, body, view, client):
     """
     Handle the submission of the image upload modal
     """
-    # Acknowledge the view submission immediately
     ack()
     
     try:
-        # Get user ID and prompt
         user_id = body["user"]["id"]
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"]["value"]
         
-        # Get the file from the modal
-        files = view["state"]["values"]["image_block"]["image_input"].get("files", [])
+        # Get file from the input
+        file_input = view["state"]["values"]["image_block"]["file_input"]
         
-        if not files:
+        if not file_input or "files" not in file_input:
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
-                text="⚠️ No image was uploaded. Please try again with an image."
+                text="⚠️ No image was uploaded. Please try again."
             )
             return
-
-        # Send initial status message
+            
+        file_id = file_input["files"][0]
+        
+        # Send initial status
         client.chat_postEphemeral(
             channel=user_id,
             user=user_id,
-            text="📥 Processing your uploaded image..."
+            text="🔄 Processing your request..."
         )
-
-        # Wait a moment for Slack to process the file
-        time.sleep(2)
-
-        # Get file info
-        file_id = files[0]
         
-        try:
-            # Get the file using files.info with retries
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    file_info = client.files_info(file=file_id)
-                    if file_info and file_info.get('ok'):
-                        break
-                    time.sleep(2)  # Wait between retries
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        raise
-                    time.sleep(2)
-
-            if not file_info or not file_info.get('ok'):
-                raise Exception("Could not retrieve file information")
-
-            file_url = file_info["file"]["url_private"]
-            
-            # Download the file
-            headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
-            file_response = requests.get(file_url, headers=headers)
-            
-            if file_response.status_code != 200:
-                raise Exception(f"Failed to download file. Status code: {file_response.status_code}")
-
-            # Create temporary file
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
-                temp_file.write(file_response.content)
-                temp_file_path = temp_file.name
-
+        # Get file info with retries
+        max_retries = 3
+        file_info = None
+        
+        for i in range(max_retries):
             try:
-                # Upload to storage
-                public_url = upload_to_storage(temp_file_path)
-                
-                # Update status
-                client.chat_postEphemeral(
-                    channel=user_id,
-                    user=user_id,
-                    text="🎨 Starting image recreation... This may take a few moments."
-                )
-                
-                # Generate recreations
-                result = generate_ideogram_recreation(public_url, prompt)
-                
-                if result:
-                    # Get channel for posting
-                    public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
-                    target_channel = public_channel_id if public_channel_id else user_id
-                    
-                    # Send results
-                    for i, (image_url, enhanced_prompt) in enumerate(result, 1):
-                        blocks = [
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": f"*Recreation {i} of {len(result)}*\n```{enhanced_prompt}```"
-                                }
-                            },
-                            {
-                                "type": "image",
-                                "title": {
-                                    "type": "plain_text",
-                                    "text": f"Generated Image {i}"
-                                },
-                                "image_url": image_url,
-                                "alt_text": f"AI generated image {i}"
-                            },
-                            {
-                                "type": "context",
-                                "elements": [
-                                    {
-                                        "type": "mrkdwn",
-                                        "text": f"🔗 <{image_url}|Download image {i}>"
-                                    }
-                                ]
-                            }
-                        ]
-                        
-                        client.chat_postMessage(
-                            channel=target_channel,
-                            blocks=blocks,
-                            text=f"Generated recreation {i} of {len(result)}",
-                            unfurl_links=False,
-                            unfurl_media=False
-                        )
-                        time.sleep(1)
-                    
-                    logger.info(f"Successfully sent {len(result)} recreated images")
-                    
-                else:
-                    client.chat_postEphemeral(
-                        channel=user_id,
-                        user=user_id,
-                        text="❌ Failed to generate recreations. Please try again."
-                    )
-                    
-            finally:
-                # Cleanup
-                try:
-                    os.unlink(temp_file_path)
-                except Exception as e:
-                    logger.error(f"Failed to delete temporary file: {str(e)}")
-                    
-        except Exception as e:
-            logger.error(f"File handling error: {str(e)}")
+                # Add delay before trying to access file
+                time.sleep(2)
+                response = client.files_info(file=file_id)
+                if response["ok"]:
+                    file_info = response["file"]
+                    break
+            except Exception as e:
+                logger.error(f"Attempt {i+1} failed: {str(e)}")
+                if i == max_retries - 1:
+                    raise
+        
+        if not file_info:
+            raise Exception("Could not access file information")
+            
+        # Download file
+        url_private = file_info["url_private"]
+        headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
+        
+        response = requests.get(url_private, headers=headers)
+        if response.status_code != 200:
+            raise Exception(f"Failed to download file: {response.status_code}")
+            
+        # Save to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
+            temp_file.write(response.content)
+            temp_path = temp_file.name
+            
+        try:
+            # Upload to storage
+            public_url = upload_to_storage(temp_path)
+            
+            # Update status
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
-                text="❌ Failed to process the uploaded file. Please try again."
+                text="🎨 Generating recreations..."
             )
             
+            # Generate recreations
+            result = generate_ideogram_recreation(public_url, prompt)
+            
+            if result:
+                # Send results
+                public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
+                target_channel = public_channel_id if public_channel_id else user_id
+                
+                for i, (image_url, enhanced_prompt) in enumerate(result, 1):
+                    blocks = [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*Recreation {i}/{len(result)}*\n{enhanced_prompt}"
+                            }
+                        },
+                        {
+                            "type": "image",
+                            "title": {
+                                "type": "plain_text",
+                                "text": "Generated Image"
+                            },
+                            "image_url": image_url,
+                            "alt_text": "AI generated image"
+                        }
+                    ]
+                    
+                    client.chat_postMessage(
+                        channel=target_channel,
+                        blocks=blocks,
+                        text=f"Generated recreation {i}/{len(result)}"
+                    )
+                    time.sleep(1)
+            else:
+                client.chat_postEphemeral(
+                    channel=user_id,
+                    user=user_id,
+                    text="❌ Failed to generate recreations. Please try again."
+                )
+                
+        finally:
+            # Cleanup
+            try:
+                os.unlink(temp_path)
+            except Exception as e:
+                logger.error(f"Failed to delete temp file: {str(e)}")
+                
     except Exception as e:
-        logger.error(f"Error in image upload submission: {str(e)}")
+        logger.error(f"Error processing upload: {str(e)}")
         if body and "user" in body:
             client.chat_postEphemeral(
                 channel=body["user"]["id"],
                 user=body["user"]["id"],
-                text="❌ An error occurred. Please try again or contact support."
+                text="❌ An error occurred. Please try again."
             )
 
 def run_slack_app():
