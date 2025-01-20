@@ -696,7 +696,7 @@ def handle_image_upload_submission(ack, body, view, client):
         )
         
         try:
-            # Try to get the file URL directly
+            # Get file URL and download
             if isinstance(file_data, str):
                 file_id = file_data
                 file_url = f"https://files.slack.com/files-pri/{body['team']['id']}/{file_id}"
@@ -712,28 +712,27 @@ def handle_image_upload_submission(ack, body, view, client):
             if response.status_code != 200:
                 raise Exception(f"Failed to download file: {response.status_code}")
                 
-            # Save to temp file and process directly
+            # Process the image
             with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
                 temp_file.write(response.content)
                 temp_path = temp_file.name
                 
                 try:
-                    # Generate recreations directly from the temp file
+                    # Update status
+                    client.chat_postEphemeral(
+                        channel=user_id,
+                        user=user_id,
+                        text="🎨 Generating recreations..."
+                    )
+                    
+                    # Prepare the request to Ideogram API
                     with open(temp_path, 'rb') as image_file:
-                        # Update status
-                        client.chat_postEphemeral(
-                            channel=user_id,
-                            user=user_id,
-                            text="🎨 Generating recreations..."
-                        )
-                        
-                        # Create the multipart form data
                         files = {
                             'image_file': ('image.png', image_file, 'image/png')
                         }
                         
                         data = {
-                            'prompt': prompt if prompt else "Recreate this image",
+                            'prompt': prompt if prompt else "Recreate this image with artistic improvements",
                             'model': 'V_2',
                             'num_images': '4',
                             'magic_prompt_option': 'AUTO'
@@ -745,6 +744,10 @@ def handle_image_upload_submission(ack, body, view, client):
                             'Accept': 'application/json'
                         }
                         
+                        logger.info("Making request to Ideogram API...")
+                        logger.info(f"Headers: {ideogram_headers}")
+                        logger.info(f"Data: {data}")
+                        
                         ideogram_response = requests.post(
                             'https://api.ideogram.ai/api/v1/generate',
                             headers=ideogram_headers,
@@ -753,9 +756,10 @@ def handle_image_upload_submission(ack, body, view, client):
                             timeout=None
                         )
                         
+                        logger.info(f"Ideogram API response status: {ideogram_response.status_code}")
+                        logger.info(f"Response content: {ideogram_response.text}")
+                        
                         if ideogram_response.status_code != 200:
-                            logger.error(f"Ideogram API error. Status code: {ideogram_response.status_code}")
-                            logger.error(f"Response content: {ideogram_response.text}")
                             raise Exception("Failed to generate recreations")
                             
                         result_data = ideogram_response.json()
