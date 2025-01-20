@@ -662,15 +662,18 @@ def handle_image_upload_submission(ack, body, view, client):
     """
     Handle the submission of the image upload modal
     """
+    # Acknowledge the view submission immediately
     ack()
     
     try:
-        # Get the uploaded file and prompt
-        image_block = view["state"]["values"]["image_block"]["image_input"]
-        prompt = view["state"]["values"]["prompt_block"]["prompt_input"]["value"]
+        # Get user ID and prompt
         user_id = body["user"]["id"]
+        prompt = view["state"]["values"]["prompt_block"]["prompt_input"]["value"]
         
-        if "files" not in image_block:
+        # Get the file from the modal
+        files = view["state"]["values"]["image_block"]["image_input"].get("files", [])
+        
+        if not files:
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
@@ -678,34 +681,55 @@ def handle_image_upload_submission(ack, body, view, client):
             )
             return
 
+        # Send initial status message
+        client.chat_postEphemeral(
+            channel=user_id,
+            user=user_id,
+            text="📥 Processing your uploaded image..."
+        )
+
+        # Wait a moment for Slack to process the file
+        time.sleep(2)
+
         # Get file info
-        file_id = image_block["files"][0]
+        file_id = files[0]
         
         try:
-            # Get file info using files.info
-            file_info = client.files_info(file=file_id)
-            if not file_info or 'file' not in file_info:
-                raise Exception("Failed to get file information")
-                
+            # Get the file using files.info with retries
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    file_info = client.files_info(file=file_id)
+                    if file_info and file_info.get('ok'):
+                        break
+                    time.sleep(2)  # Wait between retries
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise
+                    time.sleep(2)
+
+            if not file_info or not file_info.get('ok'):
+                raise Exception("Could not retrieve file information")
+
             file_url = file_info["file"]["url_private"]
             
-            # Download the file using Slack's API token for authentication
+            # Download the file
             headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
             file_response = requests.get(file_url, headers=headers)
             
             if file_response.status_code != 200:
                 raise Exception(f"Failed to download file. Status code: {file_response.status_code}")
 
-            # Create a temporary file
+            # Create temporary file
             with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as temp_file:
                 temp_file.write(file_response.content)
                 temp_file_path = temp_file.name
 
             try:
-                # Upload to storage and get public URL
+                # Upload to storage
                 public_url = upload_to_storage(temp_file_path)
                 
-                # Notify user
+                # Update status
                 client.chat_postEphemeral(
                     channel=user_id,
                     user=user_id,
@@ -716,11 +740,11 @@ def handle_image_upload_submission(ack, body, view, client):
                 result = generate_ideogram_recreation(public_url, prompt)
                 
                 if result:
-                    # Get public channel ID
+                    # Get channel for posting
                     public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
                     target_channel = public_channel_id if public_channel_id else user_id
                     
-                    # Send each result
+                    # Send results
                     for i, (image_url, enhanced_prompt) in enumerate(result, 1):
                         blocks = [
                             {
@@ -757,8 +781,6 @@ def handle_image_upload_submission(ack, body, view, client):
                             unfurl_links=False,
                             unfurl_media=False
                         )
-                        
-                        # Small delay between messages
                         time.sleep(1)
                     
                     logger.info(f"Successfully sent {len(result)} recreated images")
@@ -771,7 +793,7 @@ def handle_image_upload_submission(ack, body, view, client):
                     )
                     
             finally:
-                # Clean up temporary file
+                # Cleanup
                 try:
                     os.unlink(temp_file_path)
                 except Exception as e:
