@@ -14,8 +14,7 @@ import shutil
 from pathlib import Path
 import traceback
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG)
+# Setup logging
 logger = logging.getLogger(__name__)
 
 # Load environment variables
@@ -272,6 +271,7 @@ def generate_midjourney_image(prompt):
     except Exception as e:
         logger.error(f"Error in generate_midjourney_image: {str(e)}")
         return None
+
 def generate_ideogram_image(prompt, num_images=5):
     """
     Generate images using Ideogram API
@@ -417,21 +417,22 @@ def generate_ideogram_recreation(image_file_content, prompt=None):
     except Exception as e:
         logger.error(f"Error in generate_ideogram_recreation: {str(e)}")
         return None
+
 @app.command("/generate")
-async def handle_generate_command(ack, respond, command, client):
+def handle_generate_command(ack, respond, command, client):
     """
     Handle the /generate slash command
     """
     logger.info(f"Received command: {command}")
-    ack()
+    ack()  # Acknowledge the command immediately
     
-    command_text = command['text'].strip()
+    command_text = command.get('text', '').strip()
     
     if not command_text:
         respond({
             "text": "Please specify a service and parameters:\n" +
-                   "1. Text to image: `/generate [ideogram|midjourney] your prompt`\n" +
-                   "2. Image recreation: `/generate recreation` (with an image file)",
+                   "1. Text generation: `/generate [ideogram|midjourney] your prompt`\n" +
+                   "2. Image recreation: `/generate ideogram-recreation` (attach an image) [optional prompt]",
             "response_type": "ephemeral"
         })
         return
@@ -439,23 +440,18 @@ async def handle_generate_command(ack, respond, command, client):
     parts = command_text.split()
     service = parts[0].lower()
     
-    if service not in ['ideogram', 'midjourney', 'recreation']:
+    if service not in ['ideogram', 'midjourney', 'ideogram-recreation']:
         respond({
-            "text": "Please specify a valid service: 'ideogram', 'midjourney', or 'recreation'",
+            "text": "Please specify a valid service: 'ideogram', 'midjourney', or 'ideogram-recreation'",
             "response_type": "ephemeral"
         })
         return
 
     try:
-        # Get channel IDs
-        public_channel_id = os.environ['PUBLIC_CHANNEL_ID']
-        current_channel_id = command['channel_id']
-        is_public = current_channel_id == public_channel_id
-
-        if service == 'recreation':
-            # Open modal for file upload
+        if service == 'ideogram-recreation':
+            logger.info("Opening recreation upload modal...")
             try:
-                client.views_open(
+                result = client.views_open(
                     trigger_id=command["trigger_id"],
                     view={
                         "type": "modal",
@@ -506,6 +502,7 @@ async def handle_generate_command(ack, respond, command, client):
                         ]
                     }
                 )
+                logger.info(f"Modal opened successfully: {result}")
             except Exception as e:
                 logger.error(f"Error opening modal: {str(e)}")
                 respond({
@@ -514,7 +511,7 @@ async def handle_generate_command(ack, respond, command, client):
                 })
             return
         else:
-            # Handle text-to-image generation
+            # Handle other services (ideogram, midjourney)
             prompt = ' '.join(parts[1:])
             if not prompt:
                 respond({
@@ -591,12 +588,12 @@ async def handle_generate_command(ack, respond, command, client):
                     "text": f"Generated {len(result)} images using {service.title()}",
                     "unfurl_links": False,
                     "unfurl_media": False,
-                    "response_type": "in_channel" if is_public else "ephemeral",
+                    "response_type": "in_channel" if os.environ.get('PUBLIC_CHANNEL_ID') else "ephemeral",
                     "replace_original": True
                 }
                 
                 # Log channel information
-                logger.info(f"Sending response - Channel: {current_channel_id}, Public: {public_channel_id}, Is Public: {is_public}")
+                logger.info(f"Sending response - Channel: {command['channel_id']}, Public: {os.environ.get('PUBLIC_CHANNEL_ID')}")
                 
                 respond(response_payload)
                 logger.info(f"Successfully sent {len(result)} images to Slack")
@@ -611,13 +608,12 @@ async def handle_generate_command(ack, respond, command, client):
                 })
             
     except Exception as e:
-        error_msg = f"Error: {str(e)}"
-        logger.error(error_msg)
+        logger.error(f"Error in command handler: {str(e)}")
         respond({
-            "text": "An unexpected error occurred. Please try again or contact support if the problem persists.",
-            "response_type": "ephemeral",
-            "replace_original": True
+            "text": "An error occurred. Please try again.",
+            "response_type": "ephemeral"
         })
+
 @app.view("recreation_upload_modal")
 def handle_recreation_submission(ack, body, view, client):
     """
@@ -798,6 +794,7 @@ def handle_recreation_submission(ack, body, view, client):
                 user=body["user"]["id"],
                 text="❌ An error occurred. Please try again."
             )
+
 def run_slack_app():
     """
     Run the Slack app in socket mode
