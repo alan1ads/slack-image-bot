@@ -461,7 +461,7 @@ def handle_generate_command(ack, respond, command, client):
                         "callback_id": "recreation_upload_modal",
                         "title": {
                             "type": "plain_text",
-                            "text": "Upload Image for Recreation",
+                            "text": "Recreate Image",  # Shortened title
                             "emoji": True
                         },
                         "submit": {
@@ -469,7 +469,19 @@ def handle_generate_command(ack, respond, command, client):
                             "text": "Generate",
                             "emoji": True
                         },
+                        "close": {
+                            "type": "plain_text",
+                            "text": "Cancel",
+                            "emoji": True
+                        },
                         "blocks": [
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": "Upload an image to create AI-powered variations"
+                                }
+                            },
                             {
                                 "type": "input",
                                 "block_id": "image_block",
@@ -480,7 +492,7 @@ def handle_generate_command(ack, respond, command, client):
                                 },
                                 "label": {
                                     "type": "plain_text",
-                                    "text": "Select an image to recreate",
+                                    "text": "Select Image",
                                     "emoji": True
                                 }
                             },
@@ -493,12 +505,12 @@ def handle_generate_command(ack, respond, command, client):
                                     "action_id": "prompt_input",
                                     "placeholder": {
                                         "type": "plain_text",
-                                        "text": "Optional: Add guidance for the recreation"
+                                        "text": "Optional: Guide the recreation style"
                                     }
                                 },
                                 "label": {
                                     "type": "plain_text",
-                                    "text": "Recreation Prompt",
+                                    "text": "Prompt",
                                     "emoji": True
                                 }
                             }
