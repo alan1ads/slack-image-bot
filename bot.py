@@ -650,28 +650,23 @@ def handle_generate_command(ack, respond, command, client):
         })
 
 @app.view("recreation_upload_modal")
-def handle_recreation_submission(ack, body, view, client):
+def handle_recreation_submission(ack, body, client):
     """Handle the submission of the recreation upload modal"""
     ack()
     
     try:
         # Get the stored metadata
-        private_metadata = json.loads(view.get("private_metadata", "{}"))
+        private_metadata = json.loads(body["view"]["private_metadata"])
         channel_id = private_metadata.get("channel_id")
-        user_id = private_metadata.get("user_id")
-        
-        if not channel_id:
-            channel_id = body["user"]["id"]  # Fallback to DM with user
+        user_id = body["user"]["id"]
         
         # Process file upload
-        file_blocks = view["state"]["values"]["image_block"]["file_input"]
+        file_blocks = body["view"]["state"]["values"]["image_block"]["file_input"]
         if not file_blocks.get("files"):
             raise ValueError("No file was uploaded")
             
         file_id = file_blocks["files"][0]["id"]
-        
-        # Get the prompt if provided
-        prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
+        prompt = body["view"]["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
         
         # Download file from Slack
         file_info = client.files_info(file=file_id)
@@ -780,21 +775,23 @@ def handle_recreation_submission(ack, body, view, client):
                     }
                 ])
         
-        # Send response in the same format as ideogram/midjourney commands
-        client.chat_postMessage(
-            channel=channel_id,
-            blocks=blocks,
-            text=f"Generated {len(result['data'])} remixes",
-            unfurl_links=False,
-            unfurl_media=False,
-            response_type="in_channel" if channel_id == os.environ.get('PUBLIC_CHANNEL_ID') else "ephemeral"
-        )
+        # Send response to original channel
+        response_payload = {
+            "channel": channel_id,
+            "blocks": blocks,
+            "text": f"Generated {len(result['data'])} remixes",
+            "unfurl_links": False,
+            "unfurl_media": False
+        }
+        
+        # Post message in original channel
+        client.chat_postMessage(**response_payload)
         
     except Exception as e:
+        # Send error to original channel
         client.chat_postMessage(
             channel=channel_id,
-            text=f"❌ Error: {str(e)}",
-            response_type="ephemeral"
+            text=f"❌ Error: {str(e)}"
         )
 
 def run_slack_app():
