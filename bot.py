@@ -616,71 +616,98 @@ def handle_generate_command(ack, respond, command, client):
 
 @app.view("recreation_upload_modal")
 def handle_recreation_submission(ack, body, view, client):
-    """
-    Handle the submission of the recreation upload modal
-    """
-    ack()
+    """Handle the submission of the recreation upload modal"""
+    ack()  # Acknowledge the submission immediately
     
     try:
         user_id = body["user"]["id"]
-        channel_id = body.get("channel", {}).get("id", user_id)
+        channel_id = body.get("channel_id") or user_id  # Fallback to DM with user
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
         
         # Get file from the input
-        file_input = view["state"]["values"]["image_block"]["file_input"]
-        logger.info(f"File input data: {json.dumps(file_input, indent=2)}")
-        
-        if "files" not in file_input or not file_input["files"]:
-            raise ValueError("No files found in submission")
-        
-        file_id = file_input["files"][0]
-        logger.info(f"File ID: {file_id}")
-        
-        # Send initial status
-        client.chat_postEphemeral(
-            channel=channel_id,
-            user=user_id,
-            text="🔄 Processing your image..."
-        )
-
         try:
-            # Get file info with retries
-            max_retries = 3
-            retry_delay = 2
+            file_blocks = view["state"]["values"]["image_block"]["file_input"]
             
-            for attempt in range(max_retries):
-                try:
-                    # Get file info
-                    file_info = client.files_info(
-                        file=file_id,
-                        token=os.environ['SLACK_BOT_TOKEN']
-                    )
-                    
-                    if file_info['ok']:
-                        file_url = file_info['file']['url_private']
-                        break
-                except Exception as e:
-                    logger.warning(f"Attempt {attempt + 1}/{max_retries} failed: {str(e)}")
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        continue
-                    raise
+            if not file_blocks.get("files"):
+                raise ValueError("No file was uploaded")
+                
+            file_id = file_blocks["files"][0]["id"]
+            logger.info(f"Processing file ID: {file_id}")
             
-            # Download the file
-            download_response = requests.get(
-                file_url,
-                headers={"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"},
-                timeout=30
+            # Get file info using files.info
+            file_info = client.files_info(
+                file=file_id,
+                token=client.token  # Explicitly pass token
             )
             
+            if not file_info["ok"]:
+                raise Exception(f"Failed to get file info: {file_info.get('error')}")
+                
+            # Get file URL
+            file_url = file_info["file"]["url_private"]
+            
+            # Download the file using the bot token for authentication
+            headers = {"Authorization": f"Bearer {client.token}"}
+            download_response = requests.get(file_url, headers=headers)
+            
             if download_response.status_code != 200:
-                raise Exception(f"File download failed with status {download_response.status_code}")
+                raise Exception(f"Failed to download file: {download_response.status_code}")
             
-            # Process the image
-            image_content = download_response.content
+            # Process the image with Ideogram API
+            ideogram_headers = {
+                "accept": "application/json",
+                "content-type": "multipart/form-data",
+                "Authorization": f"Bearer {os.environ['IDEOGRAM_API_KEY']}"
+            }
             
-            # Rest of your existing code for processing the image...
+            # Prepare the file for upload
+            files = {
+                'image': ('image.png', download_response.content, 'image/png'),
+                'prompt': (None, prompt if prompt else "Generate variations of this image")
+            }
             
+            # Call Ideogram's remix endpoint
+            ideogram_response = requests.post(
+                "https://api.ideogram.ai/api/v1/remix",
+                headers=ideogram_headers,
+                files=files
+            )
+            
+            if ideogram_response.status_code != 200:
+                raise Exception(f"Ideogram API error: {ideogram_response.text}")
+            
+            # Process the response
+            result = ideogram_response.json()
+            
+            if "images" in result:
+                # Send each generated image
+                for i, image_data in enumerate(result["images"], 1):
+                    image_url = image_data.get("url")
+                    if image_url:
+                        blocks = [
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f"*Recreation {i}/4*\n{prompt if prompt else 'Generated variation'}"
+                                }
+                            },
+                            {
+                                "type": "image",
+                                "image_url": image_url,
+                                "alt_text": "AI generated image"
+                            }
+                        ]
+                        
+                        client.chat_postMessage(
+                            channel=channel_id,
+                            blocks=blocks,
+                            text=f"Generated recreation {i}/4"
+                        )
+                        time.sleep(1)  # Rate limiting precaution
+            else:
+                raise Exception("No images in response")
+                
         except Exception as e:
             logger.error(f"File processing error: {str(e)}")
             logger.error(f"Traceback: {traceback.format_exc()}")
@@ -689,8 +716,7 @@ def handle_recreation_submission(ack, body, view, client):
                 user=user_id,
                 text="❌ Failed to process the image. Please try again."
             )
-            return
-
+            
     except Exception as e:
         logger.error(f"Modal submission error: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
@@ -700,6 +726,7 @@ def handle_recreation_submission(ack, body, view, client):
                 user=user_id,
                 text="❌ An error occurred. Please try again."
             )
+
 def run_slack_app():
     """
     Run the Slack app in socket mode
