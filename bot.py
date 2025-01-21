@@ -692,32 +692,32 @@ def handle_recreation_submission(ack, body, client):
             'image_file': ('image.png', download_response.content, 'image/png')
         }
         
-        # Get description only if no prompt is provided
-        image_description = ""
-        if not prompt:
-            # Call Describe API
-            logger.info("Making request to Ideogram Describe API...")
-            describe_response = requests.post(
-                'https://api.ideogram.ai/describe',
-                headers=headers,
-                files=files
-            )
-            
-            if describe_response.status_code != 200:
-                raise Exception(f"Ideogram Describe API error: {describe_response.text}")
-                
-            describe_result = describe_response.json()
-            logger.info(f"Describe API response: {describe_result}")
-            
-            # Get the description from the response
-            descriptions = describe_result.get('descriptions', [])
-            if descriptions and descriptions[0].get('text'):
-                image_description = descriptions[0]['text']
-            else:
-                raise Exception("No description received from Ideogram Describe API")
+        # First call Describe API
+        logger.info("Making request to Ideogram Describe API...")
+        describe_response = requests.post(
+            'https://api.ideogram.ai/describe',
+            headers=headers,
+            files=files
+        )
         
-        # Use either user prompt or image description
-        final_prompt = prompt if prompt else image_description
+        if describe_response.status_code != 200:
+            raise Exception(f"Ideogram Describe API error: {describe_response.text}")
+            
+        describe_result = describe_response.json()
+        logger.info(f"Describe API response: {describe_result}")
+        
+        # Get the description from the response
+        descriptions = describe_result.get('descriptions', [])
+        if not descriptions or not descriptions[0].get('text'):
+            raise Exception("No description received from Ideogram Describe API")
+            
+        image_description = descriptions[0]['text']
+        
+        # Construct final prompt - prioritize user prompt when provided
+        final_prompt = image_description
+        if prompt:
+            final_prompt = f"{prompt}, {image_description}"  # Put user prompt first
+            
         logger.info(f"Using final prompt for remix: {final_prompt}")
         
         # Prepare remix request data
