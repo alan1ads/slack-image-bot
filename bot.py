@@ -626,153 +626,71 @@ def handle_recreation_submission(ack, body, view, client):
         channel_id = body.get("channel", {}).get("id", user_id)
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
         
-        try:
-            # Get file from the input
-            file_input = view["state"]["values"]["image_block"]["file_input"]
-            logger.info(f"File input data: {json.dumps(file_input, indent=2)}")
-            
-            if "files" not in file_input or not file_input["files"]:
-                raise ValueError("No files found in submission")
-            
-            file_id = file_input["files"][0]
-            logger.info(f"File ID: {file_id}")
-            
-            # Send initial status
-            client.chat_postEphemeral(
-                channel=channel_id,
-                user=user_id,
-                text="🔄 Processing your image..."
-            )
+        # Get file from the input
+        file_input = view["state"]["values"]["image_block"]["file_input"]
+        logger.info(f"File input data: {json.dumps(file_input, indent=2)}")
+        
+        if "files" not in file_input or not file_input["files"]:
+            raise ValueError("No files found in submission")
+        
+        file_id = file_input["files"][0]
+        logger.info(f"File ID: {file_id}")
+        
+        # Send initial status
+        client.chat_postEphemeral(
+            channel=channel_id,
+            user=user_id,
+            text="🔄 Processing your image..."
+        )
 
-            # Get file info and content
-            try:
-                response = client.files_info(
-                    file=file_id,
-                    token=os.environ['SLACK_BOT_TOKEN']
-                )
-                
-                file_url = response['file']['url_private']
-                logger.info(f"File URL obtained: {file_url}")
-                
-                # Download the file with proper authorization
-                download_response = requests.get(
-                    file_url,
-                    headers={"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
-                )
-                
-                if download_response.status_code != 200:
-                    raise Exception(f"File download failed: {download_response.status_code}")
-                
-                # Process the image
-                image_content = download_response.content
-                
-                # Update status
-                client.chat_postEphemeral(
-                    channel=channel_id,
-                    user=user_id,
-                    text="🎨 Generating variations..."
-                )
-                
-                # Call Ideogram API
-                result = generate_ideogram_recreation(image_content, prompt)
-                
-                if not result:
-                    raise Exception("Failed to generate variations")
-                
-                # Determine channel for results
-                public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
-                is_public = channel_id == public_channel_id
-                target_channel = public_channel_id if is_public else channel_id
-                
-                # Send initial message
-                header_blocks = [
-                    {
-                        "type": "header",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "🎨 Image Variations",
-                            "emoji": True
-                        }
-                    }
-                ]
-                
-                if prompt:
-                    header_blocks.append({
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"*Prompt:*\n```{prompt}```"
-                        }
-                    })
-                
-                client.chat_postMessage(
-                    channel=target_channel,
-                    blocks=header_blocks,
-                    text="Image Variations Generated"
-                )
-                
-                # Send each variation
-                for i, (image_url, enhanced_prompt) in enumerate(result, 1):
-                    variation_blocks = [
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"*Variation {i}*\n```{enhanced_prompt}```"
-                            }
-                        },
-                        {
-                            "type": "image",
-                            "title": {
-                                "type": "plain_text",
-                                "text": f"Variation {i}"
-                            },
-                            "image_url": image_url,
-                            "alt_text": "AI generated variation"
-                        },
-                        {
-                            "type": "context",
-                            "elements": [
-                                {
-                                    "type": "mrkdwn",
-                                    "text": f"🔗 <{image_url}|Download>"
-                                }
-                            ]
-                        }
-                    ]
+        try:
+            # Get file info with retries
+            max_retries = 3
+            retry_delay = 2
+            
+            for attempt in range(max_retries):
+                try:
+                    # Get file info
+                    file_info = client.files_info(
+                        file=file_id,
+                        token=os.environ['SLACK_BOT_TOKEN']
+                    )
                     
-                    client.chat_postMessage(
-                        channel=target_channel,
-                        blocks=variation_blocks,
-                        text=f"Variation {i}",
-                        unfurl_links=False,
-                        unfurl_media=False
-                    )
-                    time.sleep(1)
-                
-                if is_public:
-                    client.chat_postEphemeral(
-                        channel=channel_id,
-                        user=user_id,
-                        text="✅ Variations posted to public channel!"
-                    )
-                
-            except Exception as e:
-                logger.error(f"File processing error: {str(e)}")
-                client.chat_postEphemeral(
-                    channel=channel_id,
-                    user=user_id,
-                    text="❌ Failed to process the image. Please try again."
-                )
-                
-        except ValueError as ve:
-            logger.error(f"Validation error: {str(ve)}")
+                    if file_info['ok']:
+                        file_url = file_info['file']['url_private']
+                        break
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt + 1}/{max_retries} failed: {str(e)}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    raise
+            
+            # Download the file
+            download_response = requests.get(
+                file_url,
+                headers={"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"},
+                timeout=30
+            )
+            
+            if download_response.status_code != 200:
+                raise Exception(f"File download failed with status {download_response.status_code}")
+            
+            # Process the image
+            image_content = download_response.content
+            
+            # Rest of your existing code for processing the image...
+            
+        except Exception as e:
+            logger.error(f"File processing error: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             client.chat_postEphemeral(
                 channel=channel_id,
                 user=user_id,
-                text="⚠️ No image file was uploaded. Please try again."
+                text="❌ Failed to process the image. Please try again."
             )
-            
+            return
+
     except Exception as e:
         logger.error(f"Modal submission error: {str(e)}")
         logger.error(f"Traceback: {traceback.format_exc()}")
