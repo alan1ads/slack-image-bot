@@ -658,7 +658,7 @@ def handle_recreation_submission(ack, body, client):
         private_metadata = json.loads(body["view"]["private_metadata"])
         command_context = private_metadata.get("command_context", {})
         response_url = command_context.get("response_url")
-        channel_id = private_metadata.get("channel_id")
+        prompt = body["view"]["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
         
         if not response_url:
             raise ValueError("No response URL found")
@@ -672,7 +672,6 @@ def handle_recreation_submission(ack, body, client):
             raise ValueError("No file was uploaded")
             
         file_id = file_blocks["files"][0]["id"]
-        prompt = body["view"]["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
         
         # Download file from Slack
         file_info = client.files_info(file=file_id)
@@ -682,21 +681,18 @@ def handle_recreation_submission(ack, body, client):
             headers={"Authorization": f"Bearer {client.token}"}
         )
         
-        if download_response.status_code != 200:
-            raise Exception("Failed to download file from Slack")
-        
-        # First, let's get the image description using Ideogram's Describe API
+        # Set up headers for Ideogram API
         headers = {
             'Api-Key': os.environ.get('IDEOGRAM_API_KEY'),
             'Accept': 'application/json'
         }
         
-        # Prepare the file for both API calls
+        # Prepare file for both API calls
         files = {
             'image_file': ('image.png', download_response.content, 'image/png')
         }
         
-        # First call Describe API to get the image description
+        # First call Describe API
         logger.info("Making request to Ideogram Describe API...")
         describe_response = requests.post(
             'https://api.ideogram.ai/describe',
@@ -710,61 +706,52 @@ def handle_recreation_submission(ack, body, client):
         describe_result = describe_response.json()
         logger.info(f"Describe API response: {describe_result}")
         
-        # Get the first description from the list
-        image_description = describe_result.get('descriptions', [])[0].get('text', '') if describe_result.get('descriptions') else ''
-        
-        if not image_description:
-            raise Exception("No description received from Ideogram Describe API")
+        # Get the description from the response
+        descriptions = describe_result.get('descriptions', [])
+        if not descriptions or not descriptions[0].get('text'):
+            raise Exception("Invalid response from Ideogram Describe API")
+            
+        image_description = descriptions[0]['text']
         
         # Combine user prompt with image description if provided
         final_prompt = image_description
         if prompt:
             final_prompt = f"{image_description} {prompt}"
-        
+            
         logger.info(f"Using final prompt for remix: {final_prompt}")
         
-        # Now use the combined prompt for remix
+        # Prepare remix request data
         request_data = {
             'prompt': final_prompt,
-            'image_file': files['image_file'][1],  # Use the actual image content
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
             'magic_prompt_option': 'AUTO',
             'num_images': 4
         }
         
-        # Create proper multipart form data for remix
-        remix_files = {
-            'image_file': ('image.png', download_response.content, 'image/png'),
-            'image_request': ('request.json', json.dumps(request_data), 'application/json')
-        }
-        
+        # Make remix request
         logger.info("Making request to Ideogram Remix API...")
-        
         response = requests.post(
             'https://api.ideogram.ai/remix',
             headers=headers,
-            files=remix_files
+            files={
+                'image_file': ('image.png', download_response.content, 'image/png'),
+                'image_request': ('request.json', json.dumps(request_data), 'application/json')
+            }
         )
         
         if response.status_code != 200:
             raise Exception(f"Ideogram Remix API error: {response.text}")
-        
+            
         result = response.json()
-        logger.info("=== REMIX API RESPONSE ===")
-        logger.info(json.dumps(result, indent=2))
-        logger.info("=========================")
         
-        if 'data' not in result or not result['data']:
-            raise Exception("No image data in response")
-        
-        # Create blocks for response
+        # Build blocks for response
         blocks = [
             {
                 "type": "header",
                 "text": {
                     "type": "plain_text",
-                    "text": f"🎨 Generated {len(result['data'])} remixes",
+                    "text": "🎨 Generated 4 remixes",
                     "emoji": True
                 }
             },
@@ -774,46 +761,39 @@ def handle_recreation_submission(ack, body, client):
                     "type": "mrkdwn",
                     "text": f"*🔍 Image Description:*\n```{image_description}```"
                 }
-            }
+            },
+            {"type": "divider"}
         ]
-        
-        if prompt:
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*📝 Additional Prompt:*\n```{prompt}```"
-                }
-            })
         
         # Add blocks for each generated image
         for idx, image_data in enumerate(result['data'], 1):
-            if 'url' in image_data:
-                enhanced_prompt = (
-                    image_data.get('enhanced_prompt') or 
-                    image_data.get('prompt') or 
-                    final_prompt
-                )
-                
-                blocks.extend([
-                    {"type": "divider"},
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"*✨ Enhanced Prompt for Remix {idx}:*\n```{enhanced_prompt}```"
-                        }
-                    },
-                    {
-                        "type": "image",
-                        "title": {
-                            "type": "plain_text",
-                            "text": f"Remix {idx}"
-                        },
-                        "image_url": image_data['url'],
-                        "alt_text": f"Generated remix {idx}"
+            enhanced_prompt = image_data.get('prompt', final_prompt)
+            blocks.extend([
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*✨ Enhanced Prompt for Remix {idx}:*\n```{enhanced_prompt}```"
                     }
-                ])
+                },
+                {
+                    "type": "image",
+                    "title": {
+                        "type": "plain_text",
+                        "text": f"Remix {idx}"
+                    },
+                    "image_url": image_data['url'],
+                    "alt_text": f"Generated remix {idx}"
+                },
+                {
+                    "type": "context",
+                    "elements": [{
+                        "type": "mrkdwn",
+                        "text": f"🔗 <{image_data['url']}|Click to download remix {idx}>"
+                    }]
+                },
+                {"type": "divider"}
+            ])
         
         # Send final response
         webhook_client.send(
