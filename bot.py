@@ -443,7 +443,7 @@ def handle_generate_command(ack, respond, command, client):
     Handle the /generate slash command
     """
     logger.info(f"Received command: {command}")
-    ack()  # Acknowledge the command immediately
+    ack()
     
     command_text = command.get('text', '').strip()
     
@@ -451,7 +451,7 @@ def handle_generate_command(ack, respond, command, client):
         respond({
             "text": "Please specify a service and parameters:\n" +
                    "1. Text generation: `/generate [ideogram|midjourney] your prompt`\n" +
-                   "2. Image recreation: `/generate ideogram-recreation` (attach an image) [optional prompt]",
+                   "2. Image remix: `/generate ideogram-remix` (attach an image) [optional prompt]",
             "response_type": "ephemeral"
         })
         return
@@ -459,16 +459,16 @@ def handle_generate_command(ack, respond, command, client):
     parts = command_text.split()
     service = parts[0].lower()
     
-    if service not in ['ideogram', 'midjourney', 'ideogram-recreation']:
+    if service not in ['ideogram', 'midjourney', 'ideogram-remix']:
         respond({
-            "text": "Please specify a valid service: 'ideogram', 'midjourney', or 'ideogram-recreation'",
+            "text": "Please specify a valid service: 'ideogram', 'midjourney', or 'ideogram-remix'",
             "response_type": "ephemeral"
         })
         return
 
     try:
-        if service == 'ideogram-recreation':
-            logger.info("Opening recreation upload modal...")
+        if service == 'ideogram-remix':
+            logger.info("Opening remix upload modal...")
             try:
                 result = client.views_open(
                     trigger_id=command["trigger_id"],
@@ -477,12 +477,12 @@ def handle_generate_command(ack, respond, command, client):
                         "callback_id": "recreation_upload_modal",
                         "title": {
                             "type": "plain_text",
-                            "text": "Upload Image",
+                            "text": "Remix Image",
                             "emoji": True
                         },
                         "submit": {
                             "type": "plain_text",
-                            "text": "Generate",
+                            "text": "Generate Remixes",
                             "emoji": True
                         },
                         "blocks": [
@@ -509,7 +509,7 @@ def handle_generate_command(ack, respond, command, client):
                                     "action_id": "prompt_input",
                                     "placeholder": {
                                         "type": "plain_text",
-                                        "text": "Optional: Add a prompt to guide the recreation"
+                                        "text": "Optional: Add a prompt to guide the remix"
                                     }
                                 },
                                 "label": {
@@ -643,165 +643,133 @@ def handle_recreation_submission(ack, body, view, client):
         channel_id = body.get("channel_id") or user_id
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
         
-        logger.debug("=== Starting Image Recreation Process ===")
-        logger.debug(f"User ID: {user_id}")
-        logger.debug(f"Channel ID: {channel_id}")
-        logger.debug(f"Prompt: {prompt}")
+        print("=== Starting Image Recreation Process ===")  # Using print for Render.com visibility
+        print(f"User ID: {user_id}")
+        print(f"Prompt: {prompt}")
         
         try:
+            # Get the uploaded file information
             file_blocks = view["state"]["values"]["image_block"]["file_input"]
-            logger.debug(f"File blocks received: {json.dumps(file_blocks, indent=2)}")
-            
             if not file_blocks.get("files"):
                 raise ValueError("No file was uploaded")
-                
+            
             file_id = file_blocks["files"][0]["id"]
-            logger.debug(f"Processing file ID: {file_id}")
+            print(f"File ID: {file_id}")
             
-            # Get file info using files.info
-            logger.debug("Fetching file info from Slack...")
-            file_info = client.files_info(
-                file=file_id,
-                token=client.token
-            )
-            
-            logger.debug(f"File info response: {json.dumps(file_info, indent=2)}")
-            
+            # Get file info and download URL
+            file_info = client.files_info(file=file_id)
             if not file_info["ok"]:
                 raise Exception(f"Failed to get file info: {file_info.get('error')}")
-                
-            # Get file URL
+            
             file_url = file_info["file"]["url_private"]
-            logger.debug(f"File URL obtained: {file_url}")
             
-            # Download the file using the bot token for authentication
-            logger.debug("Downloading file from Slack...")
-            headers = {"Authorization": f"Bearer {client.token}"}
-            download_response = requests.get(file_url, headers=headers)
-            
+            # Download the file
+            download_response = requests.get(
+                file_url,
+                headers={"Authorization": f"Bearer {client.token}"}
+            )
             if download_response.status_code != 200:
-                logger.error(f"Download failed with status {download_response.status_code}")
-                logger.error(f"Response headers: {dict(download_response.headers)}")
-                raise Exception(f"Failed to download file: {download_response.status_code}")
+                raise Exception("Failed to download file from Slack")
             
-            logger.debug("File downloaded successfully")
+            # Send initial status
+            client.chat_postEphemeral(
+                channel=channel_id,
+                user=user_id,
+                text="📥 Image received, preparing to generate variations..."
+            )
             
-            # Process the image with Ideogram API
-            api_key = os.environ.get('IDEOGRAM_API_KEY')
-            if not api_key:
-                raise Exception("IDEOGRAM_API_KEY not found in environment variables")
-            
-            logger.debug("Preparing Ideogram API request...")
-            
+            # Prepare Ideogram API request
             ideogram_headers = {
-                'Api-Key': api_key,
+                'Api-Key': os.environ['IDEOGRAM_API_KEY'],
                 'Accept': 'application/json'
             }
             
-            # Prepare the request data
-            request_data = {
-                'prompt': prompt if prompt else "Recreate this image with creative variations",
-                'aspect_ratio': 'ASPECT_10_16',
-                'model': 'V_2',
-                'magic_prompt_option': 'AUTO'
-            }
-            
-            # Create proper multipart form data
-            data = {
-                'image_request': json.dumps(request_data)
-            }
-            
-            # Prepare the file for upload
+            # Create multipart form-data
             files = {
                 'image_file': ('image.png', download_response.content, 'image/png')
             }
             
-            logger.debug("=== Ideogram API Request Details ===")
-            logger.debug(f"Headers: {ideogram_headers}")
-            logger.debug(f"Request data: {json.dumps(data, indent=2)}")
-            logger.debug(f"Files included: {list(files.keys())}")
-            logger.debug("================================")
+            request_data = {
+                'prompt': prompt if prompt else "Create variations of this image",
+                'model': 'V_2',
+                'magic_prompt_option': 'AUTO'
+            }
             
-            # Send initial status message
-            client.chat_postEphemeral(
-                channel=channel_id,
-                user=user_id,
-                text="🔄 Processing your image for recreation..."
-            )
+            data = {
+                'image_request': json.dumps(request_data)
+            }
             
-            # Call Ideogram's remix endpoint
-            logger.debug("Making request to Ideogram Remix API...")
-            ideogram_response = requests.post(
+            print("=== Ideogram API Request ===")
+            print(f"Headers: {ideogram_headers}")
+            print(f"Request data: {request_data}")
+            
+            # Make request to Ideogram
+            response = requests.post(
                 'https://api.ideogram.ai/remix',
                 headers=ideogram_headers,
-                data=data,
                 files=files,
-                timeout=None
+                data=data
             )
             
-            logger.debug(f"Remix API response status: {ideogram_response.status_code}")
-            logger.debug(f"Response headers: {dict(ideogram_response.headers)}")
-            logger.debug(f"Response content: {ideogram_response.text}")
+            print(f"Response Status: {response.status_code}")
+            print(f"Response Content: {response.text}")
             
-            if ideogram_response.status_code != 200:
-                logger.error(f"Failed to generate recreations. Status: {ideogram_response.status_code}")
-                logger.error(f"Response content: {ideogram_response.text}")
-                raise Exception(f"Ideogram API error: {ideogram_response.text}")
+            if response.status_code != 200:
+                raise Exception(f"Ideogram API error: {response.text}")
             
-            response_json = ideogram_response.json()
-            logger.debug("=== REMIX API RESPONSE ===")
-            logger.debug(json.dumps(response_json, indent=2))
-            logger.debug("=========================")
-            
-            if 'data' in response_json and response_json['data']:
-                for i, image_info in enumerate(response_json['data'], 1):
-                    if 'url' in image_info:
-                        image_prompt = (
-                            image_info.get('enhanced_prompt') or 
-                            image_info.get('prompt') or 
-                            prompt or 
-                            "Recreation variation"
-                        )
-                        
-                        blocks = [
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": f"*Recreation {i}/4*\n{image_prompt}"
-                                }
-                            },
-                            {
-                                "type": "image",
-                                "image_url": image_info['url'],
-                                "alt_text": "AI generated image"
-                            }
-                        ]
-                        
-                        client.chat_postMessage(
-                            channel=channel_id,
-                            blocks=blocks,
-                            text=f"Generated recreation {i}/4"
-                        )
-                        time.sleep(1)
-            else:
+            # Process response
+            result = response.json()
+            if 'data' not in result or not result['data']:
                 raise Exception("No image data in response")
-                
+            
+            # Send results
+            for idx, image_data in enumerate(result['data'], 1):
+                if 'url' in image_data:
+                    enhanced_prompt = (
+                        image_data.get('enhanced_prompt') or 
+                        image_data.get('prompt') or 
+                        prompt or 
+                        "Image variation"
+                    )
+                    
+                    blocks = [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*Variation {idx}*\n{enhanced_prompt}"
+                            }
+                        },
+                        {
+                            "type": "image",
+                            "image_url": image_data['url'],
+                            "alt_text": f"Generated variation {idx}"
+                        }
+                    ]
+                    
+                    client.chat_postMessage(
+                        channel=channel_id,
+                        blocks=blocks,
+                        text=f"Generated variation {idx}"
+                    )
+            
+            print("=== Process Completed Successfully ===")
+            
         except Exception as e:
-            logger.error(f"File processing error: {str(e)}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            print(f"Error processing image: {str(e)}")
+            print(f"Full error: {traceback.format_exc()}")
             client.chat_postEphemeral(
                 channel=channel_id,
                 user=user_id,
-                text="❌ Failed to process the image. Please try again."
+                text=f"❌ Failed to process image: {str(e)}"
             )
             
     except Exception as e:
-        logger.error(f"Modal submission error: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        print(f"Modal submission error: {str(e)}")
+        print(f"Full error: {traceback.format_exc()}")
         if body and "user" in body:
             client.chat_postEphemeral(
-                channel=channel_id,
+                channel=user_id,
                 user=user_id,
                 text="❌ An error occurred. Please try again."
             )
