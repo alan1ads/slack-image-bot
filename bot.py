@@ -663,10 +663,7 @@ def handle_recreation_submission(ack, body, client):
         if not response_url:
             raise ValueError("No response URL found")
             
-        # Create webhook client with the response URL
         webhook_client = WebhookClient(url=response_url)
-        
-        # Send initial message
         webhook_client.send(text="Working on generating remixes...")
         
         # Process file upload
@@ -700,6 +697,7 @@ def handle_recreation_submission(ack, body, client):
         }
         
         # First call Describe API to get the image description
+        logger.info("Making request to Ideogram Describe API...")
         describe_response = requests.post(
             'https://api.ideogram.ai/describe',
             headers=headers,
@@ -710,12 +708,18 @@ def handle_recreation_submission(ack, body, client):
             raise Exception(f"Ideogram Describe API error: {describe_response.text}")
             
         describe_result = describe_response.json()
+        logger.info(f"Describe API response: {describe_result}")
         image_description = describe_result.get('description', '')
         
+        if not image_description:
+            raise Exception("No description received from Ideogram Describe API")
+        
         # Combine user prompt with image description if provided
-        final_prompt = prompt if prompt else image_description
+        final_prompt = image_description
         if prompt:
             final_prompt = f"{image_description} {prompt}"
+        
+        logger.info(f"Using final prompt for remix: {final_prompt}")
         
         # Now use the combined prompt for remix
         request_data = {
@@ -731,12 +735,12 @@ def handle_recreation_submission(ack, body, client):
             'image_request': json.dumps(request_data)
         }
         
-        logger.info(f"Making request to Ideogram Remix API with prompt: {final_prompt}")
+        logger.info("Making request to Ideogram Remix API...")
         
         response = requests.post(
             'https://api.ideogram.ai/remix',
             headers=headers,
-            files=files,  # Using the same files variable
+            files=files,
             data=remix_data
         )
         
@@ -744,6 +748,9 @@ def handle_recreation_submission(ack, body, client):
             raise Exception(f"Ideogram Remix API error: {response.text}")
         
         result = response.json()
+        logger.info("=== REMIX API RESPONSE ===")
+        logger.info(json.dumps(result, indent=2))
+        logger.info("=========================")
         
         if 'data' not in result or not result['data']:
             raise Exception("No image data in response")
@@ -776,13 +783,13 @@ def handle_recreation_submission(ack, body, client):
                 }
             })
         
+        # Add blocks for each generated image
         for idx, image_data in enumerate(result['data'], 1):
             if 'url' in image_data:
                 enhanced_prompt = (
                     image_data.get('enhanced_prompt') or 
                     image_data.get('prompt') or 
-                    prompt or 
-                    "Remix variation"
+                    final_prompt
                 )
                 
                 blocks.extend([
@@ -802,33 +809,28 @@ def handle_recreation_submission(ack, body, client):
                         },
                         "image_url": image_data['url'],
                         "alt_text": f"Generated remix {idx}"
-                    },
-                    {
-                        "type": "context",
-                        "elements": [
-                            {
-                                "type": "mrkdwn",
-                                "text": f"🔗 <{image_data['url']}|Click to download remix {idx}>"
-                            }
-                        ]
                     }
                 ])
         
-        # Send final response using the webhook
-        webhook_client.send(text=f"Generated {len(result['data'])} remixes",
-                          blocks=blocks,
-                          response_type="in_channel",
-                          replace_original=True,
-                          unfurl_links=False,
-                          unfurl_media=False)
+        # Send final response
+        webhook_client.send(
+            text=f"Generated {len(result['data'])} remixes",
+            blocks=blocks,
+            response_type="in_channel",
+            replace_original=True,
+            unfurl_links=False,
+            unfurl_media=False
+        )
         
     except Exception as e:
         logger.error(f"Error in handle_recreation_submission: {str(e)}")
         if response_url:
             webhook_client = WebhookClient(url=response_url)
-            webhook_client.send(text=f"❌ Error: {str(e)}",
-                              response_type="ephemeral",
-                              replace_original=True)
+            webhook_client.send(
+                text=f"❌ Error: {str(e)}",
+                response_type="ephemeral",
+                replace_original=True
+            )
 
 def run_slack_app():
     """
