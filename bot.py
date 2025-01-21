@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 import os
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+from slack_sdk.webhook import WebhookClient
 import requests
 import time
 import logging
@@ -473,11 +474,11 @@ def handle_generate_command(ack, respond, command, client):
     try:
         if service == 'ideogram-remix':
             try:
-                # Store the channel information
+                # Store the response_url for later use
                 private_metadata = json.dumps({
-                    "channel_id": original_channel_id,
-                    "user_id": user_id,
-                    "command_context": command  # Store full command context
+                    "channel_id": command.get("channel_id"),
+                    "user_id": command.get("user_id"),
+                    "response_url": command.get("response_url")  # Store the webhook URL
                 })
                 
                 result = client.views_open(
@@ -648,16 +649,18 @@ def handle_recreation_submission(ack, body, client):
     ack()
     
     try:
-        # Get stored metadata including full command context
+        # Get stored metadata including response_url
         private_metadata = json.loads(body["view"]["private_metadata"])
-        original_command = private_metadata.get("command_context")
+        response_url = private_metadata.get("response_url")  # Get the webhook URL
         channel_id = private_metadata.get("channel_id")
         
-        # Create a response using the original command context
-        client.chat_postMessage(
-            channel=channel_id,
+        # Use the webhook client to respond
+        webhook_client = WebhookClient(response_url)
+        
+        # Send initial message
+        webhook_client.send(
             text="Working on generating remixes...",
-            thread_ts=original_command.get("thread_ts")  # Maintain thread context if any
+            response_type="ephemeral"
         )
         
         # Process file upload
@@ -773,22 +776,23 @@ def handle_recreation_submission(ack, body, client):
                     }
                 ])
         
-        # Send final response in same channel/thread
-        client.chat_postMessage(
-            channel=channel_id,
-            thread_ts=original_command.get("thread_ts"),
-            blocks=blocks,
-            text=f"Generated {len(result['data'])} remixes",
-            unfurl_links=False,
-            unfurl_media=False
-        )
+        # Send final response using webhook
+        webhook_client.send({
+            "text": f"Generated {len(result['data'])} remixes",
+            "blocks": blocks,
+            "response_type": "in_channel",
+            "replace_original": True,
+            "unfurl_links": False,
+            "unfurl_media": False
+        })
         
     except Exception as e:
-        client.chat_postMessage(
-            channel=channel_id,
-            thread_ts=original_command.get("thread_ts") if original_command else None,
-            text=f"❌ Error: {str(e)}"
-        )
+        if response_url:
+            webhook_client.send({
+                "text": f"❌ Error: {str(e)}",
+                "response_type": "ephemeral",
+                "replace_original": True
+            })
 
 def run_slack_app():
     """
