@@ -473,19 +473,12 @@ def handle_generate_command(ack, respond, command, client):
     try:
         if service == 'ideogram-remix':
             try:
-                # Verify channel access before proceeding
-                try:
-                    client.conversations_info(channel=original_channel_id)
-                except Exception as channel_error:
-                    print(f"Warning - Channel access check failed: {str(channel_error)}")
-                
                 # Store the channel information
                 private_metadata = json.dumps({
                     "channel_id": original_channel_id,
-                    "user_id": user_id
+                    "user_id": user_id,
+                    "command_context": command  # Store full command context
                 })
-                
-                print(f"Debug - Opening modal with metadata: {private_metadata}")
                 
                 result = client.views_open(
                     trigger_id=command["trigger_id"],
@@ -655,10 +648,17 @@ def handle_recreation_submission(ack, body, client):
     ack()
     
     try:
-        # Get stored metadata
+        # Get stored metadata including full command context
         private_metadata = json.loads(body["view"]["private_metadata"])
+        original_command = private_metadata.get("command_context")
         channel_id = private_metadata.get("channel_id")
-        user_id = private_metadata.get("user_id")
+        
+        # Create a response using the original command context
+        client.chat_postMessage(
+            channel=channel_id,
+            text="Working on generating remixes...",
+            thread_ts=original_command.get("thread_ts")  # Maintain thread context if any
+        )
         
         # Process file upload
         file_blocks = body["view"]["state"]["values"]["image_block"]["file_input"]
@@ -773,9 +773,10 @@ def handle_recreation_submission(ack, body, client):
                     }
                 ])
         
-        # Send message to original channel
+        # Send final response in same channel/thread
         client.chat_postMessage(
             channel=channel_id,
+            thread_ts=original_command.get("thread_ts"),
             blocks=blocks,
             text=f"Generated {len(result['data'])} remixes",
             unfurl_links=False,
@@ -783,9 +784,9 @@ def handle_recreation_submission(ack, body, client):
         )
         
     except Exception as e:
-        # Send error to original channel
         client.chat_postMessage(
             channel=channel_id,
+            thread_ts=original_command.get("thread_ts") if original_command else None,
             text=f"❌ Error: {str(e)}"
         )
 
