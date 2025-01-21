@@ -623,171 +623,163 @@ def handle_recreation_submission(ack, body, view, client):
     
     try:
         user_id = body["user"]["id"]
+        channel_id = body.get("channel", {}).get("id", user_id)  # Fallback to user_id if no channel
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
-        
-        # Debug logging
-        logger.info("=== Modal Submission Debug ===")
-        logger.info(f"View state: {json.dumps(view['state'], indent=2)}")
-        logger.info(f"Complete view: {json.dumps(view, indent=2)}")
-        logger.info("============================")
         
         # Get file from the input
         try:
-            # Get the file input block
             file_input = view["state"]["values"]["image_block"]["file_input"]
-            logger.info(f"File input data: {json.dumps(file_input, indent=2)}")
-            
             if "files" not in file_input or not file_input["files"]:
-                raise ValueError("No files found in submission")
+                raise ValueError("No files uploaded")
             
             file_id = file_input["files"][0]
-            logger.info(f"File ID: {file_id}")
+            logger.info(f"File ID received: {file_id}")
             
-            # Wait a moment for the file to be processed
-            time.sleep(2)
-            
-            # Get file info using files.info with proper parameters
-            file_info_response = client.files_info(
-                file=file_id,
-                token=os.environ['SLACK_BOT_TOKEN']
-            )
-            
-            if not file_info_response['ok']:
-                logger.error(f"File info error: {file_info_response}")
-                raise Exception(f"Failed to get file info: {file_info_response.get('error')}")
-            
-            file_url = file_info_response['file']['url_private']
-            logger.info(f"Retrieved file URL: {file_url}")
-            
-            # Send initial status message
+            # Send initial status
             client.chat_postEphemeral(
-                channel=user_id,
+                channel=channel_id,
                 user=user_id,
-                text="🔄 Processing your image for recreation..."
+                text="🔄 Processing your request..."
             )
+
+            # Add a delay to ensure file is processed
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    time.sleep(3)  # Wait 3 seconds between attempts
+                    
+                    # Get file info
+                    file_info = client.files_info(file=file_id)
+                    if file_info['ok']:
+                        file_url = file_info['file']['url_private']
+                        logger.info(f"Successfully retrieved file info on attempt {attempt + 1}")
+                        break
+                except Exception as e:
+                    logger.warning(f"Attempt {attempt + 1}/{max_retries} failed: {str(e)}")
+                    if attempt == max_retries - 1:
+                        raise Exception("Failed to get file info after maximum retries")
+                    continue
+
+            # Download the file
+            headers = {"Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}"}
+            file_response = requests.get(file_url, headers=headers)
             
-            # Download file with proper authorization
-            headers = {
-                "Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}",
-                "User-Agent": "SlackBot/1.0"
-            }
+            if file_response.status_code != 200:
+                raise Exception(f"Failed to download file: {file_response.status_code}")
             
-            response = requests.get(file_url, headers=headers)
-            
-            if response.status_code != 200:
-                logger.error(f"Download failed with status {response.status_code}")
-                logger.error(f"Response headers: {dict(response.headers)}")
-                logger.error(f"Response content: {response.text}")
-                raise Exception(f"Failed to download file: {response.status_code}")
-            
-            # Get the image content
-            image_content = response.content
+            image_content = file_response.content
             
             # Update status
             client.chat_postEphemeral(
-                channel=user_id,
+                channel=channel_id,
                 user=user_id,
-                text="🎨 Generating recreations... This may take a minute."
+                text="🎨 Generating recreations..."
             )
             
-            # Prepare the request to Ideogram API
-            files = {
-                'image_file': ('image.png', image_content, 'image/png')
-            }
+            # Generate recreations
+            result = generate_ideogram_recreation(image_content, prompt)
+            if not result:
+                raise Exception("Failed to generate recreations")
             
-            # Prepare the request data
-            data = {
-                'image_request': {
-                    'prompt': prompt if prompt else "Recreate this image with creative variations",
-                    'aspect_ratio': 'ASPECT_10_16',
-                    'model': 'V_2',
-                    'magic_prompt_option': 'AUTO',
-                    'num_images': 4
+            # Determine channel for posting results
+            public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
+            is_public = channel_id == public_channel_id
+            target_channel = public_channel_id if is_public else channel_id
+            
+            # Send results
+            blocks = [
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "🎨 Image Recreation Results",
+                        "emoji": True
+                    }
                 }
-            }
+            ]
             
-            # Make request to Ideogram API
-            ideogram_headers = {
-                'Api-Key': os.environ.get('IDEOGRAM_API_KEY'),
-                'Content-Type': 'application/json'
-            }
+            if prompt:
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Original Prompt:*\n```{prompt}```"
+                    }
+                })
             
-            logger.info("Making request to Ideogram API...")
-            logger.info(f"Request data: {json.dumps(data, indent=2)}")
-            
-            ideogram_response = requests.post(
-                'https://api.ideogram.ai/remix',
-                headers=ideogram_headers,
-                data=json.dumps(data),
-                files=files,
-                timeout=None
+            client.chat_postMessage(
+                channel=target_channel,
+                blocks=blocks,
+                text="Image Recreation Results",
+                unfurl_links=False,
+                unfurl_media=False
             )
             
-            logger.info(f"Ideogram API response status: {ideogram_response.status_code}")
-            logger.info(f"Response content: {ideogram_response.text}")
-            
-            if ideogram_response.status_code != 200:
-                raise Exception(f"Failed to generate recreations: {ideogram_response.text}")
-            
-            result_data = ideogram_response.json()
-            
-            if 'data' in result_data and result_data['data']:
-                # Send results
-                public_channel_id = os.environ.get('PUBLIC_CHANNEL_ID')
-                target_channel = public_channel_id if public_channel_id else user_id
-                
-                for i, image_info in enumerate(result_data['data'], 1):
-                    if 'url' in image_info:
-                        image_url = image_info['url']
-                        image_prompt = image_info.get('prompt', prompt if prompt else "Image recreation")
-                        
-                        blocks = [
+            # Send each recreation in separate messages
+            for i, (image_url, enhanced_prompt) in enumerate(result, 1):
+                recreation_blocks = [
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Recreation {i}*\n```{enhanced_prompt}```"
+                        }
+                    },
+                    {
+                        "type": "image",
+                        "title": {
+                            "type": "plain_text",
+                            "text": f"Recreation {i}"
+                        },
+                        "image_url": image_url,
+                        "alt_text": "AI generated image"
+                    },
+                    {
+                        "type": "context",
+                        "elements": [
                             {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": f"*Recreation {i}/4*\n{image_prompt}"
-                                }
-                            },
-                            {
-                                "type": "image",
-                                "title": {
-                                    "type": "plain_text",
-                                    "text": "Generated Image"
-                                },
-                                "image_url": image_url,
-                                "alt_text": "AI generated image"
+                                "type": "mrkdwn",
+                                "text": f"🔗 <{image_url}|Download Image>"
                             }
                         ]
-                        
-                        client.chat_postMessage(
-                            channel=target_channel,
-                            blocks=blocks,
-                            text=f"Generated recreation {i}/4"
-                        )
-                        time.sleep(1)
-            else:
-                raise Exception("No image data in response")
+                    }
+                ]
+                
+                client.chat_postMessage(
+                    channel=target_channel,
+                    blocks=recreation_blocks,
+                    text=f"Recreation {i}",
+                    unfurl_links=False,
+                    unfurl_media=False
+                )
+                time.sleep(1)  # Slight delay between messages
+            
+            # Notify user if results were posted to public channel
+            if is_public and target_channel != channel_id:
+                client.chat_postEphemeral(
+                    channel=channel_id,
+                    user=user_id,
+                    text="✅ Recreation results have been posted in the public channel!"
+                )
                 
         except Exception as e:
-            logger.error(f"Error accessing file data: {str(e)}")
-            logger.error(f"Full error details: {traceback.format_exc()}")
+            logger.error(f"Error processing file: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             client.chat_postEphemeral(
-                channel=user_id,
+                channel=channel_id,
                 user=user_id,
-                text="⚠️ Could not access the uploaded file. Please try again."
+                text="❌ Failed to process your request. Please try again."
             )
             
     except Exception as e:
-        logger.error(f"Error in recreation submission handler: {str(e)}")
-        logger.error(f"Full error details: {traceback.format_exc()}")
+        logger.error(f"Error in modal submission: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         if body and "user" in body:
             client.chat_postEphemeral(
-                channel=body["user"]["id"],
-                user=body["user"]["id"],
-                text="❌ An error occurred. Please try again."
+                channel=channel_id,
+                user=user_id,
+                text="❌ An unexpected error occurred. Please try again."
             )
-
 def run_slack_app():
     """
     Run the Slack app in socket mode
