@@ -446,7 +446,7 @@ def handle_generate_command(ack, respond, command, client):
     original_channel_id = command.get('channel_id')
     user_id = command.get('user_id')
     
-    print(f"Command received - Channel: {original_channel_id}, User: {user_id}")
+    print(f"Command received in channel: {original_channel_id}")
     
     if not command_text:
         respond({
@@ -472,7 +472,7 @@ def handle_generate_command(ack, respond, command, client):
             try:
                 # Store the channel information
                 private_metadata = json.dumps({
-                    "channel_id": original_channel_id,
+                    "channel_id": original_channel_id,  # Store the original channel
                     "user_id": user_id
                 })
                 
@@ -483,7 +483,7 @@ def handle_generate_command(ack, respond, command, client):
                     view={
                         "type": "modal",
                         "callback_id": "recreation_upload_modal",
-                        "private_metadata": private_metadata,  # Pass the metadata
+                        "private_metadata": private_metadata,  # Pass the channel info
                         "title": {
                             "type": "plain_text",
                             "text": "Remix Image",
@@ -642,14 +642,21 @@ def handle_generate_command(ack, respond, command, client):
 @app.view("recreation_upload_modal")
 def handle_recreation_submission(ack, body, view, client):
     """Handle the submission of the recreation upload modal"""
-    # Acknowledge the modal submission immediately
     ack()
     
     try:
-        # Get metadata from the modal
+        # Get the stored metadata
         private_metadata = json.loads(view.get("private_metadata", "{}"))
         channel_id = private_metadata.get("channel_id")
         user_id = body["user"]["id"]
+        
+        print(f"Processing submission for channel: {channel_id}")
+        
+        # Initial message in the original channel
+        initial_message = client.chat_postMessage(
+            channel=channel_id,
+            text="Working on generating remixes..."
+        )
         
         # Get the prompt if provided
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
@@ -671,13 +678,6 @@ def handle_recreation_submission(ack, body, view, client):
         
         if download_response.status_code != 200:
             raise Exception("Failed to download file from Slack")
-        
-        # Send initial message to show we're processing
-        initial_message = client.chat_postMessage(
-            channel=channel_id,
-            text="Working on generating remixes...",
-            response_type="in_channel" if channel_id == os.environ.get('PUBLIC_CHANNEL_ID') else "ephemeral"
-        )
         
         # Prepare Ideogram API request
         headers = {
@@ -763,29 +763,21 @@ def handle_recreation_submission(ack, body, view, client):
                     }
                 ])
         
-        # Update the initial message with results
+        # Update the message in the original channel
         client.chat_update(
             channel=channel_id,
             ts=initial_message['ts'],
             blocks=blocks,
-            text=f"Generated {len(result['data'])} remixes",
-            response_type="in_channel" if channel_id == os.environ.get('PUBLIC_CHANNEL_ID') else "ephemeral"
+            text=f"Generated {len(result['data'])} remixes"
         )
         
     except Exception as e:
-        error_message = f"❌ Error: {str(e)}"
-        try:
-            client.chat_postMessage(
-                channel=channel_id,
-                text=error_message,
-                response_type="ephemeral"
-            )
-        except:
-            # If channel posting fails, send DM to user
-            client.chat_postMessage(
-                channel=user_id,
-                text=f"{error_message}\nPlease try again."
-            )
+        print(f"Error: {str(e)}")
+        # Send error message to the original channel
+        client.chat_postMessage(
+            channel=channel_id,
+            text=f"❌ Error: {str(e)}"
+        )
 
 def run_slack_app():
     """
