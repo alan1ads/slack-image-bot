@@ -796,15 +796,26 @@ def handle_recreation_submission(ack, body, client):
                 {"type": "divider"}
             ])
         
-        # Send final response
+        # Get channel ID from the context
+        channel_id = command_context.get("channel_id")
+        
+        # Determine response visibility based on channel
+        is_public_channel = channel_id == os.environ.get('PUBLIC_CHANNEL_ID')
+        response_type = "in_channel" if is_public_channel else "ephemeral"
+        
+        logger.info(f"Sending response - Channel: {channel_id}, Public: {is_public_channel}")
+        
+        # Send final response with appropriate visibility
         webhook_client.send(
             text=f"Generated {len(result['data'])} remixes",
             blocks=blocks,
-            response_type="in_channel",
+            response_type=response_type,  # Now dynamic based on channel
             replace_original=True,
             unfurl_links=False,
             unfurl_media=False
         )
+        
+        logger.info(f"Successfully sent {len(result['data'])} images to Slack")
         
     except Exception as e:
         logger.error(f"Error in handle_recreation_submission: {str(e)}")
