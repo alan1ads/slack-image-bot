@@ -655,10 +655,10 @@ def handle_recreation_submission(ack, body, client):
     ack()
     
     try:
-        # Get the stored metadata
+        # Get stored metadata
         private_metadata = json.loads(body["view"]["private_metadata"])
         channel_id = private_metadata.get("channel_id")
-        user_id = body["user"]["id"]
+        user_id = private_metadata.get("user_id")
         
         # Process file upload
         file_blocks = body["view"]["state"]["values"]["image_block"]["file_input"]
@@ -679,7 +679,7 @@ def handle_recreation_submission(ack, body, client):
         if download_response.status_code != 200:
             raise Exception("Failed to download file from Slack")
         
-        # Prepare Ideogram API request
+        # Process with Ideogram
         headers = {
             'Api-Key': os.environ.get('IDEOGRAM_API_KEY'),
             'Accept': 'application/json'
@@ -693,8 +693,7 @@ def handle_recreation_submission(ack, body, client):
             'prompt': prompt if prompt else "Create variations of this image",
             'model': 'V_2',
             'magic_prompt_option': 'AUTO',
-            'num_images': 4,
-            'image_weight': 80
+            'num_images': 4
         }
         
         data = {
@@ -717,7 +716,7 @@ def handle_recreation_submission(ack, body, client):
         if 'data' not in result or not result['data']:
             raise Exception("No image data in response")
         
-        # Create response blocks
+        # Create blocks for response
         blocks = [
             {
                 "type": "header",
@@ -736,7 +735,6 @@ def handle_recreation_submission(ack, body, client):
             }
         ]
         
-        # Add each image and its enhanced prompt
         for idx, image_data in enumerate(result['data'], 1):
             if 'url' in image_data:
                 enhanced_prompt = (
@@ -775,17 +773,14 @@ def handle_recreation_submission(ack, body, client):
                     }
                 ])
         
-        # Send response to original channel
-        response_payload = {
-            "channel": channel_id,
-            "blocks": blocks,
-            "text": f"Generated {len(result['data'])} remixes",
-            "unfurl_links": False,
-            "unfurl_media": False
-        }
-        
-        # Post message in original channel
-        client.chat_postMessage(**response_payload)
+        # Send message to original channel
+        client.chat_postMessage(
+            channel=channel_id,
+            blocks=blocks,
+            text=f"Generated {len(result['data'])} remixes",
+            unfurl_links=False,
+            unfurl_media=False
+        )
         
     except Exception as e:
         # Send error to original channel
