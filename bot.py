@@ -641,11 +641,11 @@ def handle_recreation_submission(ack, body, view, client):
     try:
         user_id = body["user"]["id"]
         channel_id = body.get("channel_id") or user_id
-        prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
+        user_prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
         
-        print("=== Starting Image Recreation Process ===")  # Using print for Render.com visibility
+        print("=== Starting Image Remix Process ===")
         print(f"User ID: {user_id}")
-        print(f"Prompt: {prompt}")
+        print(f"User provided prompt: {user_prompt}")
         
         try:
             # Get the uploaded file information
@@ -675,35 +675,67 @@ def handle_recreation_submission(ack, body, view, client):
             client.chat_postEphemeral(
                 channel=channel_id,
                 user=user_id,
-                text="📥 Image received, preparing to generate variations..."
+                text="📥 Image received, analyzing..."
             )
             
-            # Prepare Ideogram API request
+            # Prepare Ideogram API headers
             ideogram_headers = {
                 'Api-Key': os.environ['IDEOGRAM_API_KEY'],
                 'Accept': 'application/json'
             }
             
-            # Create multipart form-data
-            files = {
-                'image_file': ('image.png', download_response.content, 'image/png')
-            }
+            # If no prompt provided, use Describe API to get image description
+            if not user_prompt:
+                print("No prompt provided, using Describe API...")
+                
+                describe_files = {
+                    'image_file': ('image.png', download_response.content, 'image/png')
+                }
+                
+                describe_response = requests.post(
+                    'https://api.ideogram.ai/describe',
+                    headers=ideogram_headers,
+                    files=describe_files
+                )
+                
+                if describe_response.status_code != 200:
+                    print(f"Describe API error: {describe_response.text}")
+                    raise Exception("Failed to analyze image")
+                
+                describe_result = describe_response.json()
+                generated_prompt = describe_result.get('data', {}).get('description', "Create variations of this image")
+                print(f"Generated description: {generated_prompt}")
+                
+                final_prompt = generated_prompt
+                client.chat_postEphemeral(
+                    channel=channel_id,
+                    user=user_id,
+                    text=f"📝 Generated description: {generated_prompt}\nNow creating remixes..."
+                )
+            else:
+                final_prompt = user_prompt
             
+            # Prepare remix request
             request_data = {
-                'prompt': prompt if prompt else "Create variations of this image",
+                'prompt': final_prompt,
                 'model': 'V_2',
-                'magic_prompt_option': 'AUTO'
+                'magic_prompt_option': 'AUTO',
+                'image_weight': 80  # Higher weight to maintain more similarity with original
             }
             
             data = {
                 'image_request': json.dumps(request_data)
             }
             
-            print("=== Ideogram API Request ===")
+            files = {
+                'image_file': ('image.png', download_response.content, 'image/png')
+            }
+            
+            print("=== Ideogram Remix API Request ===")
             print(f"Headers: {ideogram_headers}")
             print(f"Request data: {request_data}")
             
-            # Make request to Ideogram
+            # Make request to Ideogram Remix API
             response = requests.post(
                 'https://api.ideogram.ai/remix',
                 headers=ideogram_headers,
@@ -723,35 +755,45 @@ def handle_recreation_submission(ack, body, view, client):
                 raise Exception("No image data in response")
             
             # Send results
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*🎨 Generated remixes using prompt:*\n```{final_prompt}```"
+                    }
+                },
+                {"type": "divider"}
+            ]
+            
             for idx, image_data in enumerate(result['data'], 1):
                 if 'url' in image_data:
                     enhanced_prompt = (
                         image_data.get('enhanced_prompt') or 
                         image_data.get('prompt') or 
-                        prompt or 
-                        "Image variation"
+                        final_prompt
                     )
                     
-                    blocks = [
+                    blocks.extend([
                         {
                             "type": "section",
                             "text": {
                                 "type": "mrkdwn",
-                                "text": f"*Variation {idx}*\n{enhanced_prompt}"
+                                "text": f"*Remix {idx}*\n{enhanced_prompt}"
                             }
                         },
                         {
                             "type": "image",
                             "image_url": image_data['url'],
-                            "alt_text": f"Generated variation {idx}"
+                            "alt_text": f"Generated remix {idx}"
                         }
-                    ]
-                    
-                    client.chat_postMessage(
-                        channel=channel_id,
-                        blocks=blocks,
-                        text=f"Generated variation {idx}"
-                    )
+                    ])
+            
+            client.chat_postMessage(
+                channel=channel_id,
+                blocks=blocks,
+                text=f"Generated {len(result['data'])} remixes"
+            )
             
             print("=== Process Completed Successfully ===")
             
