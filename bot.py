@@ -14,11 +14,23 @@ import shutil
 from pathlib import Path
 import traceback
 
-# Setup logging
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+
+# Verify environment variables
+required_vars = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'IDEOGRAM_API_KEY']
+for var in required_vars:
+    if not os.environ.get(var):
+        logger.error(f"Missing required environment variable: {var}")
+    else:
+        logger.debug(f"Found environment variable: {var}")
 
 # Verify API key is loaded
 api_key = os.environ.get('IDEOGRAM_API_KEY')
@@ -631,39 +643,56 @@ def handle_recreation_submission(ack, body, view, client):
         channel_id = body.get("channel_id") or user_id
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
         
+        logger.debug("=== Starting Image Recreation Process ===")
+        logger.debug(f"User ID: {user_id}")
+        logger.debug(f"Channel ID: {channel_id}")
+        logger.debug(f"Prompt: {prompt}")
+        
         try:
             file_blocks = view["state"]["values"]["image_block"]["file_input"]
+            logger.debug(f"File blocks received: {json.dumps(file_blocks, indent=2)}")
             
             if not file_blocks.get("files"):
                 raise ValueError("No file was uploaded")
                 
             file_id = file_blocks["files"][0]["id"]
-            logger.info(f"Processing file ID: {file_id}")
+            logger.debug(f"Processing file ID: {file_id}")
             
             # Get file info using files.info
+            logger.debug("Fetching file info from Slack...")
             file_info = client.files_info(
                 file=file_id,
                 token=client.token
             )
+            
+            logger.debug(f"File info response: {json.dumps(file_info, indent=2)}")
             
             if not file_info["ok"]:
                 raise Exception(f"Failed to get file info: {file_info.get('error')}")
                 
             # Get file URL
             file_url = file_info["file"]["url_private"]
+            logger.debug(f"File URL obtained: {file_url}")
             
             # Download the file using the bot token for authentication
+            logger.debug("Downloading file from Slack...")
             headers = {"Authorization": f"Bearer {client.token}"}
             download_response = requests.get(file_url, headers=headers)
             
             if download_response.status_code != 200:
+                logger.error(f"Download failed with status {download_response.status_code}")
+                logger.error(f"Response headers: {dict(download_response.headers)}")
                 raise Exception(f"Failed to download file: {download_response.status_code}")
+            
+            logger.debug("File downloaded successfully")
             
             # Process the image with Ideogram API
             api_key = os.environ.get('IDEOGRAM_API_KEY')
             if not api_key:
                 raise Exception("IDEOGRAM_API_KEY not found in environment variables")
-                
+            
+            logger.debug("Preparing Ideogram API request...")
+            
             ideogram_headers = {
                 'Api-Key': api_key,
                 'Accept': 'application/json'
@@ -682,18 +711,26 @@ def handle_recreation_submission(ack, body, view, client):
                 'image_request': json.dumps(request_data)
             }
             
-            # Prepare the file for upload with correct parameter name
+            # Prepare the file for upload
             files = {
                 'image_file': ('image.png', download_response.content, 'image/png')
             }
             
-            logger.info("Making request to Ideogram Remix API...")
-            logger.info(f"Using API key: {api_key[:10]}...")
-            logger.info(f"Headers: {ideogram_headers}")
-            logger.info(f"Request data: {json.dumps(data, indent=2)}")
-            logger.info(f"Files included: {list(files.keys())}")
+            logger.debug("=== Ideogram API Request Details ===")
+            logger.debug(f"Headers: {ideogram_headers}")
+            logger.debug(f"Request data: {json.dumps(data, indent=2)}")
+            logger.debug(f"Files included: {list(files.keys())}")
+            logger.debug("================================")
+            
+            # Send initial status message
+            client.chat_postEphemeral(
+                channel=channel_id,
+                user=user_id,
+                text="🔄 Processing your image for recreation..."
+            )
             
             # Call Ideogram's remix endpoint
+            logger.debug("Making request to Ideogram Remix API...")
             ideogram_response = requests.post(
                 'https://api.ideogram.ai/remix',
                 headers=ideogram_headers,
@@ -702,9 +739,9 @@ def handle_recreation_submission(ack, body, view, client):
                 timeout=None
             )
             
-            logger.info(f"Remix API response status: {ideogram_response.status_code}")
-            logger.info(f"Response headers: {dict(ideogram_response.headers)}")
-            logger.info(f"Response content: {ideogram_response.text}")
+            logger.debug(f"Remix API response status: {ideogram_response.status_code}")
+            logger.debug(f"Response headers: {dict(ideogram_response.headers)}")
+            logger.debug(f"Response content: {ideogram_response.text}")
             
             if ideogram_response.status_code != 200:
                 logger.error(f"Failed to generate recreations. Status: {ideogram_response.status_code}")
@@ -712,9 +749,9 @@ def handle_recreation_submission(ack, body, view, client):
                 raise Exception(f"Ideogram API error: {ideogram_response.text}")
             
             response_json = ideogram_response.json()
-            logger.info("=== REMIX API RESPONSE ===")
-            logger.info(json.dumps(response_json, indent=2))
-            logger.info("=========================")
+            logger.debug("=== REMIX API RESPONSE ===")
+            logger.debug(json.dumps(response_json, indent=2))
+            logger.debug("=========================")
             
             if 'data' in response_json and response_json['data']:
                 for i, image_info in enumerate(response_json['data'], 1):
