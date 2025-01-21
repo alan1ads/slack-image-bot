@@ -709,7 +709,9 @@ def handle_recreation_submission(ack, body, client):
             
         describe_result = describe_response.json()
         logger.info(f"Describe API response: {describe_result}")
-        image_description = describe_result.get('description', '')
+        
+        # Get the first description from the list
+        image_description = describe_result.get('descriptions', [])[0].get('text', '') if describe_result.get('descriptions') else ''
         
         if not image_description:
             raise Exception("No description received from Ideogram Describe API")
@@ -724,6 +726,7 @@ def handle_recreation_submission(ack, body, client):
         # Now use the combined prompt for remix
         request_data = {
             'prompt': final_prompt,
+            'image_file': files['image_file'][1],  # Use the actual image content
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
             'magic_prompt_option': 'AUTO',
@@ -731,8 +734,9 @@ def handle_recreation_submission(ack, body, client):
         }
         
         # Create proper multipart form data for remix
-        remix_data = {
-            'image_request': json.dumps(request_data)
+        remix_files = {
+            'image_file': ('image.png', download_response.content, 'image/png'),
+            'image_request': ('request.json', json.dumps(request_data), 'application/json')
         }
         
         logger.info("Making request to Ideogram Remix API...")
@@ -740,8 +744,7 @@ def handle_recreation_submission(ack, body, client):
         response = requests.post(
             'https://api.ideogram.ai/remix',
             headers=headers,
-            files=files,
-            data=remix_data
+            files=remix_files
         )
         
         if response.status_code != 200:
