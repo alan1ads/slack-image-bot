@@ -444,6 +444,9 @@ def handle_generate_command(ack, respond, command, client):
     
     command_text = command.get('text', '').strip()
     original_channel_id = command.get('channel_id')
+    user_id = command.get('user_id')
+    
+    print(f"Command received - Channel: {original_channel_id}, User: {user_id}")
     
     if not command_text:
         respond({
@@ -467,18 +470,20 @@ def handle_generate_command(ack, respond, command, client):
     try:
         if service == 'ideogram-remix':
             try:
-                # Store the original channel information
+                # Store the channel information
                 private_metadata = json.dumps({
                     "channel_id": original_channel_id,
-                    "user_id": command["user_id"]
+                    "user_id": user_id
                 })
+                
+                print(f"Opening modal with metadata: {private_metadata}")
                 
                 result = client.views_open(
                     trigger_id=command["trigger_id"],
                     view={
                         "type": "modal",
                         "callback_id": "recreation_upload_modal",
-                        "private_metadata": private_metadata,
+                        "private_metadata": private_metadata,  # Pass the metadata
                         "title": {
                             "type": "plain_text",
                             "text": "Remix Image",
@@ -643,12 +648,21 @@ def handle_recreation_submission(ack, body, view, client):
         # Get the stored metadata
         private_metadata = json.loads(view.get("private_metadata", "{}"))
         channel_id = private_metadata.get("channel_id")
-        user_id = private_metadata.get("user_id")
+        user_id = body["user"]["id"]  # Get the user ID from the body
         
+        # Validate channel_id
         if not channel_id:
-            channel_id = body["user"]["id"]
+            print(f"No channel_id found in metadata: {private_metadata}")
+            channel_id = user_id  # Fallback to DM with user
         
-        prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
+        print(f"Processing submission - Channel ID: {channel_id}, User ID: {user_id}")
+        
+        # Send initial status message
+        client.chat_postEphemeral(
+            channel=channel_id,
+            user=user_id,
+            text="Processing your image..."
+        )
         
         try:
             file_blocks = view["state"]["values"]["image_block"]["file_input"]
@@ -680,6 +694,8 @@ def handle_recreation_submission(ack, body, view, client):
             files = {
                 'image_file': ('image.png', download_response.content, 'image/png')
             }
+            
+            prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
             
             request_data = {
                 'prompt': prompt if prompt else "Create variations of this image",
@@ -745,6 +761,8 @@ def handle_recreation_submission(ack, body, view, client):
             )
             
         except Exception as e:
+            print(f"Error processing image: {str(e)}")
+            print(f"Channel ID: {channel_id}, User ID: {user_id}")
             client.chat_postEphemeral(
                 channel=channel_id,
                 user=user_id,
@@ -752,12 +770,17 @@ def handle_recreation_submission(ack, body, view, client):
             )
             
     except Exception as e:
-        if body and "user" in body:
-            client.chat_postEphemeral(
-                channel=channel_id,
-                user=user_id,
-                text=f"❌ An error occurred: {str(e)}"
-            )
+        print(f"Modal submission error: {str(e)}")
+        print(f"Body: {json.dumps(body, indent=2)}")
+        if user_id:
+            try:
+                # Try to send error message to user's DM
+                client.chat_postMessage(
+                    channel=user_id,
+                    text=f"❌ An error occurred: {str(e)}"
+                )
+            except Exception as dm_error:
+                print(f"Failed to send DM: {str(dm_error)}")
 
 def run_slack_app():
     """
