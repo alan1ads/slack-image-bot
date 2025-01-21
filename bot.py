@@ -478,7 +478,12 @@ def handle_generate_command(ack, respond, command, client):
                 private_metadata = json.dumps({
                     "channel_id": command.get("channel_id"),
                     "user_id": command.get("user_id"),
-                    "response_url": command.get("response_url")  # Store the webhook URL
+                    "response_url": command.get("response_url"),
+                    "command_context": {
+                        "channel_id": command.get("channel_id"),
+                        "user_id": command.get("user_id"),
+                        "response_url": command.get("response_url")
+                    }
                 })
                 
                 result = client.views_open(
@@ -649,13 +654,17 @@ def handle_recreation_submission(ack, body, client):
     ack()
     
     try:
-        # Get stored metadata including response_url
+        # Get stored metadata including command context
         private_metadata = json.loads(body["view"]["private_metadata"])
-        response_url = private_metadata.get("response_url")  # Get the webhook URL
+        command_context = private_metadata.get("command_context", {})
+        response_url = command_context.get("response_url")
         channel_id = private_metadata.get("channel_id")
         
-        # Use the webhook client to respond
-        webhook_client = WebhookClient(response_url)
+        if not response_url:
+            raise ValueError("No response URL found")
+            
+        # Create webhook client with the response URL
+        webhook_client = WebhookClient(url=response_url)
         
         # Send initial message
         webhook_client.send(
@@ -776,7 +785,7 @@ def handle_recreation_submission(ack, body, client):
                     }
                 ])
         
-        # Send final response using webhook
+        # Send final response using the webhook
         webhook_client.send({
             "text": f"Generated {len(result['data'])} remixes",
             "blocks": blocks,
@@ -787,7 +796,9 @@ def handle_recreation_submission(ack, body, client):
         })
         
     except Exception as e:
+        logger.error(f"Error in handle_recreation_submission: {str(e)}")
         if response_url:
+            webhook_client = WebhookClient(url=response_url)
             webhook_client.send({
                 "text": f"❌ Error: {str(e)}",
                 "response_type": "ephemeral",
