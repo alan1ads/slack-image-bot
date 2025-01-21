@@ -665,7 +665,7 @@ def handle_recreation_submission(ack, body, view, client):
                 raise Exception("IDEOGRAM_API_KEY not found in environment variables")
                 
             ideogram_headers = {
-                'Api-Key': api_key,  # Changed from Authorization to Api-Key
+                'Api-Key': api_key,
                 'Accept': 'application/json'
             }
             
@@ -682,15 +682,16 @@ def handle_recreation_submission(ack, body, view, client):
                 'image_request': json.dumps(request_data)
             }
             
-            # Prepare the file for upload
+            # Prepare the file for upload with correct parameter name
             files = {
-                'image': ('image.png', download_response.content, 'image/png')
+                'image_file': ('image.png', download_response.content, 'image/png')
             }
             
             logger.info("Making request to Ideogram Remix API...")
-            logger.info(f"Using API key: {api_key[:10]}...")  # Log first 10 chars of API key
+            logger.info(f"Using API key: {api_key[:10]}...")
             logger.info(f"Headers: {ideogram_headers}")
-            logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
+            logger.info(f"Request data: {json.dumps(data, indent=2)}")
+            logger.info(f"Files included: {list(files.keys())}")
             
             # Call Ideogram's remix endpoint
             ideogram_response = requests.post(
@@ -706,6 +707,8 @@ def handle_recreation_submission(ack, body, view, client):
             logger.info(f"Response content: {ideogram_response.text}")
             
             if ideogram_response.status_code != 200:
+                logger.error(f"Failed to generate recreations. Status: {ideogram_response.status_code}")
+                logger.error(f"Response content: {ideogram_response.text}")
                 raise Exception(f"Ideogram API error: {ideogram_response.text}")
             
             response_json = ideogram_response.json()
@@ -716,7 +719,6 @@ def handle_recreation_submission(ack, body, view, client):
             if 'data' in response_json and response_json['data']:
                 for i, image_info in enumerate(response_json['data'], 1):
                     if 'url' in image_info:
-                        # Use enhanced prompt if available, otherwise use original or default
                         image_prompt = (
                             image_info.get('enhanced_prompt') or 
                             image_info.get('prompt') or 
@@ -744,7 +746,7 @@ def handle_recreation_submission(ack, body, view, client):
                             blocks=blocks,
                             text=f"Generated recreation {i}/4"
                         )
-                        time.sleep(1)  # Rate limiting precaution
+                        time.sleep(1)
             else:
                 raise Exception("No image data in response")
                 
