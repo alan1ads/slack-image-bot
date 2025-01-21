@@ -20,6 +20,13 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
+# Verify API key is loaded
+api_key = os.environ.get('IDEOGRAM_API_KEY')
+if not api_key:
+    logger.error("IDEOGRAM_API_KEY not found in environment variables")
+else:
+    logger.info("IDEOGRAM_API_KEY found in environment variables")
+
 # Initialize Flask app for health checks
 flask_app = Flask(__name__)
 
@@ -653,9 +660,13 @@ def handle_recreation_submission(ack, body, view, client):
                 raise Exception(f"Failed to download file: {download_response.status_code}")
             
             # Process the image with Ideogram API
+            api_key = os.environ.get('IDEOGRAM_API_KEY')
+            if not api_key:
+                raise Exception("IDEOGRAM_API_KEY not found in environment variables")
+                
             ideogram_headers = {
-                "Authorization": f"Bearer {os.environ['IDEOGRAM_API_KEY']}",
-                "Accept": "application/json"
+                'Api-Key': api_key,  # Changed from Authorization to Api-Key
+                'Accept': 'application/json'
             }
             
             # Prepare the request data
@@ -677,11 +688,13 @@ def handle_recreation_submission(ack, body, view, client):
             }
             
             logger.info("Making request to Ideogram Remix API...")
+            logger.info(f"Using API key: {api_key[:10]}...")  # Log first 10 chars of API key
+            logger.info(f"Headers: {ideogram_headers}")
             logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
             
-            # Call Ideogram's remix endpoint with the correct URL
+            # Call Ideogram's remix endpoint
             ideogram_response = requests.post(
-                'https://api.ideogram.ai/remix',  # Updated endpoint URL
+                'https://api.ideogram.ai/remix',
                 headers=ideogram_headers,
                 data=data,
                 files=files,
@@ -689,10 +702,10 @@ def handle_recreation_submission(ack, body, view, client):
             )
             
             logger.info(f"Remix API response status: {ideogram_response.status_code}")
+            logger.info(f"Response headers: {dict(ideogram_response.headers)}")
+            logger.info(f"Response content: {ideogram_response.text}")
             
             if ideogram_response.status_code != 200:
-                logger.error(f"Failed to generate recreations. Status: {ideogram_response.status_code}")
-                logger.error(f"Response content: {ideogram_response.text}")
                 raise Exception(f"Ideogram API error: {ideogram_response.text}")
             
             response_json = ideogram_response.json()
