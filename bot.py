@@ -472,7 +472,7 @@ def handle_generate_command(ack, respond, command, client):
             try:
                 # Store the channel information
                 private_metadata = json.dumps({
-                    "channel_id": original_channel_id,  # Store the original channel
+                    "channel_id": original_channel_id,
                     "user_id": user_id
                 })
                 
@@ -483,7 +483,7 @@ def handle_generate_command(ack, respond, command, client):
                     view={
                         "type": "modal",
                         "callback_id": "recreation_upload_modal",
-                        "private_metadata": private_metadata,  # Pass the channel info
+                        "private_metadata": private_metadata,
                         "title": {
                             "type": "plain_text",
                             "text": "Remix Image",
@@ -531,6 +531,7 @@ def handle_generate_command(ack, respond, command, client):
                     }
                 )
             except Exception as e:
+                # Send error to original channel
                 respond({
                     "text": f"Failed to open upload dialog: {str(e)}",
                     "response_type": "ephemeral"
@@ -652,132 +653,143 @@ def handle_recreation_submission(ack, body, view, client):
         
         print(f"Processing submission for channel: {channel_id}")
         
-        # Initial message in the original channel
+        # Send initial message to original channel
         initial_message = client.chat_postMessage(
             channel=channel_id,
             text="Working on generating remixes..."
         )
         
-        # Get the prompt if provided
-        prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
-        
-        # Get the uploaded file
-        file_blocks = view["state"]["values"]["image_block"]["file_input"]
-        if not file_blocks.get("files"):
-            raise ValueError("No file was uploaded")
-        
-        file_id = file_blocks["files"][0]["id"]
-        
-        # Download file from Slack
-        file_info = client.files_info(file=file_id)
-        file_url = file_info["file"]["url_private"]
-        download_response = requests.get(
-            file_url,
-            headers={"Authorization": f"Bearer {client.token}"}
-        )
-        
-        if download_response.status_code != 200:
-            raise Exception("Failed to download file from Slack")
-        
-        # Prepare Ideogram API request
-        headers = {
-            'Api-Key': os.environ.get('IDEOGRAM_API_KEY'),
-            'Accept': 'application/json'
-        }
-        
-        files = {
-            'image_file': ('image.png', download_response.content, 'image/png')
-        }
-        
-        request_data = {
-            'prompt': prompt if prompt else "Create variations of this image",
-            'model': 'V_2',
-            'magic_prompt_option': 'AUTO',
-            'num_images': 4,
-            'image_weight': 80
-        }
-        
-        data = {
-            'image_request': json.dumps(request_data)
-        }
-        
-        # Make request to Ideogram
-        response = requests.post(
-            'https://api.ideogram.ai/remix',
-            headers=headers,
-            files=files,
-            data=data
-        )
-        
-        if response.status_code != 200:
-            raise Exception(f"Ideogram API error: {response.text}")
-        
-        result = response.json()
-        
-        # Create response blocks
-        blocks = [
-            {
-                "type": "header",
-                "text": {
-                    "type": "plain_text",
-                    "text": f"🎨 Generated {len(result['data'])} remixes",
-                    "emoji": True
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*📝 Prompt:*\n```{prompt if prompt else 'Create variations of this image'}```"
-                }
+        try:
+            # Get the prompt if provided
+            prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
+            
+            # Get the uploaded file
+            file_blocks = view["state"]["values"]["image_block"]["file_input"]
+            if not file_blocks.get("files"):
+                raise ValueError("No file was uploaded")
+            
+            file_id = file_blocks["files"][0]["id"]
+            
+            # Download file from Slack
+            file_info = client.files_info(file=file_id)
+            file_url = file_info["file"]["url_private"]
+            download_response = requests.get(
+                file_url,
+                headers={"Authorization": f"Bearer {client.token}"}
+            )
+            
+            if download_response.status_code != 200:
+                raise Exception("Failed to download file from Slack")
+            
+            # Prepare Ideogram API request
+            headers = {
+                'Api-Key': os.environ.get('IDEOGRAM_API_KEY'),
+                'Accept': 'application/json'
             }
-        ]
-        
-        # Add each image and its enhanced prompt
-        for idx, image_data in enumerate(result['data'], 1):
-            if 'url' in image_data:
-                enhanced_prompt = (
-                    image_data.get('enhanced_prompt') or 
-                    image_data.get('prompt') or 
-                    prompt or 
-                    "Remix variation"
-                )
-                
-                blocks.extend([
-                    {"type": "divider"},
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"*✨ Enhanced Prompt for Remix {idx}:*\n```{enhanced_prompt}```"
-                        }
-                    },
-                    {
-                        "type": "image",
-                        "title": {
-                            "type": "plain_text",
-                            "text": f"Remix {idx}"
-                        },
-                        "image_url": image_data['url'],
-                        "alt_text": f"Generated remix {idx}"
+            
+            files = {
+                'image_file': ('image.png', download_response.content, 'image/png')
+            }
+            
+            request_data = {
+                'prompt': prompt if prompt else "Create variations of this image",
+                'model': 'V_2',
+                'magic_prompt_option': 'AUTO',
+                'num_images': 4,
+                'image_weight': 80
+            }
+            
+            data = {
+                'image_request': json.dumps(request_data)
+            }
+            
+            # Make request to Ideogram
+            response = requests.post(
+                'https://api.ideogram.ai/remix',
+                headers=headers,
+                files=files,
+                data=data
+            )
+            
+            if response.status_code != 200:
+                raise Exception(f"Ideogram API error: {response.text}")
+            
+            result = response.json()
+            
+            # Create response blocks
+            blocks = [
+                {
+                    "type": "header",
+                    "text": {
+                        "type": "plain_text",
+                        "text": f"🎨 Generated {len(result['data'])} remixes",
+                        "emoji": True
                     }
-                ])
-        
-        # Update the message in the original channel
-        client.chat_update(
-            channel=channel_id,
-            ts=initial_message['ts'],
-            blocks=blocks,
-            text=f"Generated {len(result['data'])} remixes"
-        )
-        
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*📝 Prompt:*\n```{prompt if prompt else 'Create variations of this image'}```"
+                    }
+                }
+            ]
+            
+            # Add each image and its enhanced prompt
+            for idx, image_data in enumerate(result['data'], 1):
+                if 'url' in image_data:
+                    enhanced_prompt = (
+                        image_data.get('enhanced_prompt') or 
+                        image_data.get('prompt') or 
+                        prompt or 
+                        "Remix variation"
+                    )
+                    
+                    blocks.extend([
+                        {"type": "divider"},
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"*✨ Enhanced Prompt for Remix {idx}:*\n```{enhanced_prompt}```"
+                            }
+                        },
+                        {
+                            "type": "image",
+                            "title": {
+                                "type": "plain_text",
+                                "text": f"Remix {idx}"
+                            },
+                            "image_url": image_data['url'],
+                            "alt_text": f"Generated remix {idx}"
+                        }
+                    ])
+            
+            # Update message in original channel
+            client.chat_update(
+                channel=channel_id,
+                ts=initial_message['ts'],
+                blocks=blocks,
+                text=f"Generated {len(result['data'])} remixes"
+            )
+            
+        except Exception as e:
+            print(f"Error processing image: {str(e)}")
+            # Update the initial message with error in original channel
+            client.chat_update(
+                channel=channel_id,
+                ts=initial_message['ts'],
+                text=f"❌ Failed to process image: {str(e)}"
+            )
+            
     except Exception as e:
-        print(f"Error: {str(e)}")
-        # Send error message to the original channel
-        client.chat_postMessage(
-            channel=channel_id,
-            text=f"❌ Error: {str(e)}"
-        )
+        print(f"Modal submission error: {str(e)}")
+        if channel_id:
+            # Send error to original channel
+            client.chat_postMessage(
+                channel=channel_id,
+                text=f"❌ An error occurred: {str(e)}"
+            )
 
 def run_slack_app():
     """
