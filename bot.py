@@ -720,7 +720,8 @@ def handle_recreation_submission(ack, body, view, client):
                 'prompt': final_prompt,
                 'model': 'V_2',
                 'magic_prompt_option': 'AUTO',
-                'image_weight': 80  # Higher weight to maintain more similarity with original
+                'image_weight': 80,  # Higher weight to maintain more similarity with original
+                'num_images': 4  # Request 4 variations
             }
             
             data = {
