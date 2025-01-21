@@ -617,14 +617,13 @@ def handle_generate_command(ack, respond, command, client):
 @app.view("recreation_upload_modal")
 def handle_recreation_submission(ack, body, view, client):
     """Handle the submission of the recreation upload modal"""
-    ack()  # Acknowledge the submission immediately
+    ack()
     
     try:
         user_id = body["user"]["id"]
-        channel_id = body.get("channel_id") or user_id  # Fallback to DM with user
+        channel_id = body.get("channel_id") or user_id
         prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
         
-        # Get file from the input
         try:
             file_blocks = view["state"]["values"]["image_block"]["file_input"]
             
@@ -637,7 +636,7 @@ def handle_recreation_submission(ack, body, view, client):
             # Get file info using files.info
             file_info = client.files_info(
                 file=file_id,
-                token=client.token  # Explicitly pass token
+                token=client.token
             )
             
             if not file_info["ok"]:
@@ -655,46 +654,74 @@ def handle_recreation_submission(ack, body, view, client):
             
             # Process the image with Ideogram API
             ideogram_headers = {
-                "accept": "application/json",
-                "content-type": "multipart/form-data",
-                "Authorization": f"Bearer {os.environ['IDEOGRAM_API_KEY']}"
+                "Authorization": f"Bearer {os.environ['IDEOGRAM_API_KEY']}",
+                "Accept": "application/json"
+            }
+            
+            # Prepare the request data
+            request_data = {
+                'prompt': prompt if prompt else "Recreate this image with creative variations",
+                'aspect_ratio': 'ASPECT_10_16',
+                'model': 'V_2',
+                'magic_prompt_option': 'AUTO'
+            }
+            
+            # Create proper multipart form data
+            data = {
+                'image_request': json.dumps(request_data)
             }
             
             # Prepare the file for upload
             files = {
-                'image': ('image.png', download_response.content, 'image/png'),
-                'prompt': (None, prompt if prompt else "Generate variations of this image")
+                'image': ('image.png', download_response.content, 'image/png')
             }
             
-            # Call Ideogram's remix endpoint
+            logger.info("Making request to Ideogram Remix API...")
+            logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
+            
+            # Call Ideogram's remix endpoint with the correct URL
             ideogram_response = requests.post(
-                "https://api.ideogram.ai/api/v1/remix",
+                'https://api.ideogram.ai/remix',  # Updated endpoint URL
                 headers=ideogram_headers,
-                files=files
+                data=data,
+                files=files,
+                timeout=None
             )
             
+            logger.info(f"Remix API response status: {ideogram_response.status_code}")
+            
             if ideogram_response.status_code != 200:
+                logger.error(f"Failed to generate recreations. Status: {ideogram_response.status_code}")
+                logger.error(f"Response content: {ideogram_response.text}")
                 raise Exception(f"Ideogram API error: {ideogram_response.text}")
             
-            # Process the response
-            result = ideogram_response.json()
+            response_json = ideogram_response.json()
+            logger.info("=== REMIX API RESPONSE ===")
+            logger.info(json.dumps(response_json, indent=2))
+            logger.info("=========================")
             
-            if "images" in result:
-                # Send each generated image
-                for i, image_data in enumerate(result["images"], 1):
-                    image_url = image_data.get("url")
-                    if image_url:
+            if 'data' in response_json and response_json['data']:
+                for i, image_info in enumerate(response_json['data'], 1):
+                    if 'url' in image_info:
+                        # Use enhanced prompt if available, otherwise use original or default
+                        image_prompt = (
+                            image_info.get('enhanced_prompt') or 
+                            image_info.get('prompt') or 
+                            prompt or 
+                            "Recreation variation"
+                        )
+                        
                         blocks = [
                             {
                                 "type": "section",
                                 "text": {
                                     "type": "mrkdwn",
-                                    "text": f"*Recreation {i}/4*\n{prompt if prompt else 'Generated variation'}"
+                                    "text": f"*Recreation {i}/4*\n{image_prompt}"
                                 }
                             },
                             {
                                 "type": "image",
-                                "image_url": image_url,
+                                "image_url": image_info['url'],
                                 "alt_text": "AI generated image"
                             }
                         ]
@@ -706,7 +733,7 @@ def handle_recreation_submission(ack, body, view, client):
                         )
                         time.sleep(1)  # Rate limiting precaution
             else:
-                raise Exception("No images in response")
+                raise Exception("No image data in response")
                 
         except Exception as e:
             logger.error(f"File processing error: {str(e)}")
