@@ -688,37 +688,60 @@ def handle_recreation_submission(ack, body, client):
         if download_response.status_code != 200:
             raise Exception("Failed to download file from Slack")
         
-        # Process with Ideogram
+        # First, let's get the image description using Ideogram's Describe API
         headers = {
             'Api-Key': os.environ.get('IDEOGRAM_API_KEY'),
             'Accept': 'application/json'
         }
         
+        # Prepare the file for both API calls
         files = {
             'image_file': ('image.png', download_response.content, 'image/png')
         }
         
+        # First call Describe API to get the image description
+        describe_response = requests.post(
+            'https://api.ideogram.ai/describe',
+            headers=headers,
+            files=files
+        )
+        
+        if describe_response.status_code != 200:
+            raise Exception(f"Ideogram Describe API error: {describe_response.text}")
+            
+        describe_result = describe_response.json()
+        image_description = describe_result.get('description', '')
+        
+        # Combine user prompt with image description if provided
+        final_prompt = prompt if prompt else image_description
+        if prompt:
+            final_prompt = f"{image_description} {prompt}"
+        
+        # Now use the combined prompt for remix
         request_data = {
-            'prompt': prompt if prompt else "Create variations of this image",
+            'prompt': final_prompt,
+            'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
             'magic_prompt_option': 'AUTO',
             'num_images': 4
         }
         
-        data = {
+        # Create proper multipart form data for remix
+        remix_data = {
             'image_request': json.dumps(request_data)
         }
         
-        # Make request to Ideogram
+        logger.info(f"Making request to Ideogram Remix API with prompt: {final_prompt}")
+        
         response = requests.post(
             'https://api.ideogram.ai/remix',
             headers=headers,
-            files=files,
-            data=data
+            files=files,  # Using the same files variable
+            data=remix_data
         )
         
         if response.status_code != 200:
-            raise Exception(f"Ideogram API error: {response.text}")
+            raise Exception(f"Ideogram Remix API error: {response.text}")
         
         result = response.json()
         
@@ -739,10 +762,19 @@ def handle_recreation_submission(ack, body, client):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"*📝 Original Prompt:*\n```{prompt if prompt else 'Create variations of this image'}```"
+                    "text": f"*🔍 Image Description:*\n```{image_description}```"
                 }
             }
         ]
+        
+        if prompt:
+            blocks.append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*📝 Additional Prompt:*\n```{prompt}```"
+                }
+            })
         
         for idx, image_data in enumerate(result['data'], 1):
             if 'url' in image_data:
