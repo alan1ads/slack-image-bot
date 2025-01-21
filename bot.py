@@ -667,10 +667,7 @@ def handle_recreation_submission(ack, body, client):
         webhook_client = WebhookClient(url=response_url)
         
         # Send initial message
-        webhook_client.send(
-            text="Working on generating remixes...",
-            response_type="ephemeral"
-        )
+        webhook_client.send(text="Working on generating remixes...")
         
         # Process file upload
         file_blocks = body["view"]["state"]["values"]["image_block"]["file_input"]
@@ -786,24 +783,20 @@ def handle_recreation_submission(ack, body, client):
                 ])
         
         # Send final response using the webhook
-        webhook_client.send({
-            "text": f"Generated {len(result['data'])} remixes",
-            "blocks": blocks,
-            "response_type": "in_channel",
-            "replace_original": True,
-            "unfurl_links": False,
-            "unfurl_media": False
-        })
+        webhook_client.send(text=f"Generated {len(result['data'])} remixes",
+                          blocks=blocks,
+                          response_type="in_channel",
+                          replace_original=True,
+                          unfurl_links=False,
+                          unfurl_media=False)
         
     except Exception as e:
         logger.error(f"Error in handle_recreation_submission: {str(e)}")
         if response_url:
             webhook_client = WebhookClient(url=response_url)
-            webhook_client.send({
-                "text": f"❌ Error: {str(e)}",
-                "response_type": "ephemeral",
-                "replace_original": True
-            })
+            webhook_client.send(text=f"❌ Error: {str(e)}",
+                              response_type="ephemeral",
+                              replace_original=True)
 
 def run_slack_app():
     """
