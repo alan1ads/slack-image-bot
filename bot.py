@@ -619,7 +619,6 @@ def handle_recreation_submission(ack, body, view, client):
     """
     Handle the submission of the recreation upload modal
     """
-    logger.info(f"Modal callback_id: {view.get('callback_id')}")
     ack()
     
     try:
@@ -644,7 +643,10 @@ def handle_recreation_submission(ack, body, view, client):
             file_id = file_input["files"][0]
             logger.info(f"File ID: {file_id}")
             
-            # Get file info using files.info
+            # Wait a moment for the file to be processed
+            time.sleep(2)
+            
+            # Get file info using files.info with proper parameters
             file_info_response = client.files_info(
                 file=file_id,
                 token=os.environ['SLACK_BOT_TOKEN']
@@ -657,31 +659,19 @@ def handle_recreation_submission(ack, body, view, client):
             file_url = file_info_response['file']['url_private']
             logger.info(f"Retrieved file URL: {file_url}")
             
-        except Exception as e:
-            logger.error(f"Error accessing file data: {str(e)}")
-            logger.error(f"Full error details: {traceback.format_exc()}")
+            # Send initial status message
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
-                text="⚠️ Could not access the uploaded file. Please try again."
+                text="🔄 Processing your image for recreation..."
             )
-            return
             
-        # Send initial status message
-        client.chat_postEphemeral(
-            channel=user_id,
-            user=user_id,
-            text="🔄 Processing your image for recreation..."
-        )
-        
-        try:
             # Download file with proper authorization
             headers = {
                 "Authorization": f"Bearer {os.environ['SLACK_BOT_TOKEN']}",
                 "User-Agent": "SlackBot/1.0"
             }
             
-            logger.info(f"Attempting to download file with headers: {headers}")
             response = requests.get(file_url, headers=headers)
             
             if response.status_code != 200:
@@ -707,25 +697,28 @@ def handle_recreation_submission(ack, body, view, client):
             
             # Prepare the request data
             data = {
-                'prompt': prompt if prompt else "Recreate this image with creative variations",
-                'model': 'V_2',
-                'num_images': '4',
-                'magic_prompt_option': 'AUTO'
+                'image_request': {
+                    'prompt': prompt if prompt else "Recreate this image with creative variations",
+                    'aspect_ratio': 'ASPECT_10_16',
+                    'model': 'V_2',
+                    'magic_prompt_option': 'AUTO',
+                    'num_images': 4
+                }
             }
             
             # Make request to Ideogram API
             ideogram_headers = {
                 'Api-Key': os.environ.get('IDEOGRAM_API_KEY'),
-                'Accept': 'application/json'
+                'Content-Type': 'application/json'
             }
             
             logger.info("Making request to Ideogram API...")
             logger.info(f"Request data: {json.dumps(data, indent=2)}")
             
             ideogram_response = requests.post(
-                'https://api.ideogram.ai/api/v1/generate',
+                'https://api.ideogram.ai/remix',
                 headers=ideogram_headers,
-                data=data,
+                data=json.dumps(data),
                 files=files,
                 timeout=None
             )
@@ -777,12 +770,12 @@ def handle_recreation_submission(ack, body, view, client):
                 raise Exception("No image data in response")
                 
         except Exception as e:
-            logger.error(f"Error processing recreation: {str(e)}")
+            logger.error(f"Error accessing file data: {str(e)}")
             logger.error(f"Full error details: {traceback.format_exc()}")
             client.chat_postEphemeral(
                 channel=user_id,
                 user=user_id,
-                text="❌ Failed to process the recreation. Please try again."
+                text="⚠️ Could not access the uploaded file. Please try again."
             )
             
     except Exception as e:
