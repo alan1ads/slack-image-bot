@@ -692,7 +692,7 @@ def handle_recreation_submission(ack, body, client):
             'image_file': ('image.png', download_response.content, 'image/png')
         }
         
-        # First call Describe API
+        # First call Describe API - always get the description
         logger.info("Making request to Ideogram Describe API...")
         describe_response = requests.post(
             'https://api.ideogram.ai/describe',
@@ -716,7 +716,7 @@ def handle_recreation_submission(ack, body, client):
         # Construct final prompt - prioritize user prompt when provided
         final_prompt = image_description
         if prompt:
-            final_prompt = f"{prompt}, {image_description}"  # Put user prompt first
+            final_prompt = f"{prompt}, in the style of {image_description}"  # Put user prompt first with style reference
             
         logger.info(f"Using final prompt for remix: {final_prompt}")
         
@@ -729,7 +729,7 @@ def handle_recreation_submission(ack, body, client):
             'num_images': 4
         }
         
-        # Make remix request
+        # Make remix request with proper logging
         logger.info("Making request to Ideogram Remix API...")
         response = requests.post(
             'https://api.ideogram.ai/remix',
@@ -741,6 +741,7 @@ def handle_recreation_submission(ack, body, client):
         )
         
         if response.status_code != 200:
+            logger.error(f"Remix API error response: {response.text}")
             raise Exception(f"Ideogram Remix API error: {response.text}")
             
         result = response.json()
