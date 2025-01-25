@@ -359,43 +359,30 @@ def generate_ideogram_image(prompt, num_images=5, magic_prompt="AUTO"):
         return None
 
 def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="AUTO"):
-    logger.info(f"Starting image recreation with Ideogram (Magic Prompt: {magic_prompt})")
-    
+    """Generate recreations of an image using Ideogram Remix API"""
     api_key = os.environ.get('IDEOGRAM_API_KEY')
     if not api_key:
         raise ValueError("IDEOGRAM_API_KEY not set")
 
     try:
-        headers = {
-            'Api-Key': api_key,
-            'Accept': 'application/json'
-        }
+        headers = {'Api-Key': api_key}
         
-        # First get image description
+        # Get image description first
         describe_response = get_image_description(image_file_content)
         base_description = describe_response.get('descriptions', [{}])[0].get('text', '')
         logger.info(f"Base description: {base_description}")
         
-        # Construct final prompt based on input and description
-        if prompt:
-            final_prompt = f"{prompt}. Style reference: {base_description}"
-        else:
-            final_prompt = base_description
-            
-        logger.info(f"Final prompt: {final_prompt}")
-        
-        # Prepare remix request
+        # Build request data
         request_data = {
-            'prompt': final_prompt,
-            'magic_prompt': magic_prompt in ["ON", "AUTO"],
-            'aspect_ratio': 'ASPECT_10_16',
+            'prompt': prompt if prompt else base_description,
+            'magic_prompt_option': magic_prompt,  # Keep the original magic_prompt setting
             'model': 'V_2',
-            'num_images': 4  # Request 4 variations
+            'num_images': 4,
+            'aspect_ratio': 'ASPECT_10_16',
+            'image_weight': 50  # Add image weight as shown in documentation
         }
         
-        logger.info(f"Sending request with data: {json.dumps(request_data, indent=2)}")
-        
-        # Make remix request
+        # Make API request
         response = requests.post(
             'https://api.ideogram.ai/remix',
             headers=headers,
@@ -406,19 +393,25 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
         )
         
         if response.status_code != 200:
-            logger.error(f"Remix API error. Status: {response.status_code}")
-            logger.error(f"Response: {response.text}")
+            logger.error(f"Failed to generate recreations. Status: {response.status_code}")
+            logger.error(f"Response content: {response.text}")
             return None
-            
+        
         response_json = response.json()
         logger.info(f"Remix API response: {json.dumps(response_json, indent=2)}")
         
         if 'data' in response_json and response_json['data']:
-            image_data = [
-                (item['url'], item.get('enhanced_prompt', final_prompt))
-                for item in response_json['data']
-                if 'url' in item
-            ]
+            image_data = []
+            for item in response_json['data']:
+                if 'url' in item:
+                    # Use enhanced prompt if available, keeping hierarchy
+                    prompt_text = (
+                        item.get('enhanced_prompt') or 
+                        item.get('prompt') or 
+                        prompt or 
+                        base_description
+                    )
+                    image_data.append((item['url'], prompt_text))
             
             logger.info(f"Successfully generated {len(image_data)} recreations")
             return image_data
