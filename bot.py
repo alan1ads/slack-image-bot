@@ -777,40 +777,32 @@ def generate_remix(
     try:
         # First get the description
         logger.info("Making request to Ideogram Describe API...")
+        files = {'image_file': ('image.png', image_data, 'image/png')}
         describe_response = requests.post(
             'https://api.ideogram.ai/describe',
             headers=headers,
-            files={'image_file': ('image.png', image_data, 'image/png')}
+            files=files
         )
         describe_response.raise_for_status()
         describe_data = describe_response.json()
         
-        # Get the description text
-        base_prompt = prompt if prompt else describe_data.get('descriptions', [{}])[0].get('text', '')
-        
         # Prepare the remix request
-        request_json = {
-            "prompt": base_prompt,
-            "magic_prompt": magic_prompt_option == "ON",
-            "num_images": 4,
-            "resolution": "RESOLUTION_720_1280",
-            "image_weight": 0.5,
-            "style_type": "GENERAL"
+        request_data = {
+            'prompt': prompt if prompt else describe_data.get('descriptions', [{}])[0].get('text', ''),
+            'magic_prompt': magic_prompt_option == "ON",
+            'num_images': 4,  # Request 4 images
+            'resolution': "RESOLUTION_720_1280",
+            'image_weight': 50  # Balance between original image and prompt
         }
         
-        logger.info(f"Request JSON: {json.dumps(request_json, indent=2)}")
-        
-        # Make the remix request
         logger.info("Making request to Ideogram Remix API...")
-        multipart_data = {
-            'image_file': ('image.png', image_data, 'image/png'),
-            'request_json': ('request.json', json.dumps(request_json), 'application/json')
-        }
-        
         response = requests.post(
             'https://api.ideogram.ai/remix',
             headers=headers,
-            files=multipart_data
+            files={
+                'image_file': ('image.png', image_data, 'image/png'),
+                'image_request': (None, json.dumps(request_data))
+            }
         )
         response.raise_for_status()
         
