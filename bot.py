@@ -797,15 +797,14 @@ def generate_remix(
                 final_prompt = f"{prompt}. Base image shows: {base_description}"
         else:
             magic_prompt = magic_prompt_option == "ON"
-        
+
         request_data = {
             'prompt': final_prompt,
             'magic_prompt': magic_prompt,
             'num_images': 4,
-            'resolution': "RESOLUTION_720_1280",
+            'aspect_ratio': 'ASPECT_10_16',
             'image_weight': 50,
-            'model': 'V_2',
-            'aspect_ratio': 'ASPECT_10_16'
+            'model': 'V_2'
         }
         
         logger.info("Making request to Ideogram Remix API...")
