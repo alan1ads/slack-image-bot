@@ -774,43 +774,59 @@ def generate_remix(
 
     headers = {'Api-Key': api_key}
     
-    # Prepare multipart form data
-    files = {
-        'image_file': ('image.png', image_data),
-        'image_request': (None, json.dumps({
-            'prompt': prompt if prompt else "",
-            'aspect_ratio': 'ASPECT_10_16',
-            'model': 'V_2',
-            'magic_prompt_option': magic_prompt_option,
-            'image_weight': 50
-        }))
-    }
-    
-    logger.info("Making request to Ideogram Remix API...")
-    response = requests.post(
-        'https://api.ideogram.ai/remix',
-        headers=headers,
-        files=files
-    )
-    response.raise_for_status()
-    
-    # Parse and log the response
-    response_data = response.json()
-    logger.info("=== REMIX API RESPONSE ===")
-    logger.info(json.dumps(response_data, indent=2))
-    logger.info("========================")
-    
-    # Extract image URLs from the response
-    image_urls = []
-    if 'data' in response_data:
-        for item in response_data['data']:
-            if 'url' in item:
-                image_urls.append(item['url'])
-    
-    if not image_urls:
-        raise ValueError("No images found in response")
+    try:
+        # First get the description
+        logger.info("Making request to Ideogram Describe API...")
+        files = {'image_file': ('image.png', image_data, 'image/png')}
+        describe_response = requests.post(
+            'https://api.ideogram.ai/describe',
+            headers=headers,
+            files=files
+        )
+        describe_response.raise_for_status()
+        describe_data = describe_response.json()
         
-    return {"images": image_urls}
+        # Prepare the remix request
+        request_data = {
+            'prompt': prompt if prompt else describe_data.get('descriptions', [{}])[0].get('text', ''),
+            'magic_prompt': magic_prompt_option == "ON",
+            'num_images': 4,  # Request 4 images
+            'resolution': "RESOLUTION_720_1280",
+            'image_weight': 50  # Balance between original image and prompt
+        }
+        
+        logger.info("Making request to Ideogram Remix API...")
+        response = requests.post(
+            'https://api.ideogram.ai/remix',
+            headers=headers,
+            files={
+                'image_file': ('image.png', image_data, 'image/png'),
+                'image_request': (None, json.dumps(request_data))
+            }
+        )
+        response.raise_for_status()
+        
+        response_data = response.json()
+        logger.info("=== REMIX API RESPONSE ===")
+        logger.info(json.dumps(response_data, indent=2))
+        logger.info("========================")
+        
+        # Extract image URLs from the response
+        image_urls = []
+        if 'data' in response_data:
+            for item in response_data['data']:
+                if 'url' in item:
+                    image_urls.append(item['url'])
+        
+        if not image_urls:
+            raise ValueError("No images found in response")
+            
+        return {"images": image_urls}
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Remix API error: {str(e)}")
+        if hasattr(e, 'response') and e.response is not None:
+            logger.error(f"Response content: {e.response.text}")
+        raise
 
 def send_slack_response(response_url: str, text: str, blocks: Optional[List[Dict]] = None) -> None:
     """Send response back to Slack"""
