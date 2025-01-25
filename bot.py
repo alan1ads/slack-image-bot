@@ -659,54 +659,38 @@ def handle_generate_command(ack, respond, command, client):
         })
 
 @app.view("recreation_upload_modal")
-async def handle_recreation_submission(ack, body, client):
-    """Handle the submission of the recreation upload modal"""
-    await ack()
-    
+def handle_recreation_submission(ack, body, client):
+    """Handle the remix modal submission"""
     try:
-        # Get stored metadata including command context
-        private_metadata = json.loads(body["view"]["private_metadata"])
-        command_context = private_metadata.get("command_context", {})
-        response_url = command_context.get("response_url")
-        prompt = body["view"]["state"]["values"]["prompt_block"]["prompt_input"].get("value", "")
+        # Acknowledge the request immediately
+        ack()
         
-        if not response_url:
-            raise ValueError("No response URL found")
-            
-        webhook_client = WebhookClient(url=response_url)
-        await webhook_client.send(text="Working on generating remixes...")
+        # Extract metadata and context
+        view = body["view"]
+        metadata = json.loads(view["private_metadata"])
+        magic_prompt = metadata.get("magic_prompt", "ON")
         
-        # Process file upload
-        file_blocks = body["view"]["state"]["values"]["image_block"]["file_input"]
-        if not file_blocks.get("files"):
-            raise ValueError("No file was uploaded")
-            
-        file_id = file_blocks["files"][0]["id"]
+        # Get uploaded file and prompt
+        files = view["state"]["values"]["image_block"]["file_input"]["files"]
+        user_prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value")
         
-        # Download file from Slack
-        file_info = await client.files_info(file=file_id)
-        file_url = file_info["file"]["url_private"]
-        headers = {"Authorization": f"Bearer {client.token}"}
-        image_data = await download_slack_image(file_url, headers)
+        # Send initial response
+        send_slack_response(metadata["response_url"], "Working on generating remixes...")
         
+        # Download the image
+        file_info = client.files_info(file=files[0]["id"])
+        headers = {"Authorization": f"Bearer {os.environ.get('SLACK_BOT_TOKEN')}"}
+        image_data = download_slack_image(file_info["file"]["url_private"], headers)
+
         # Get image description
-        describe_response = await get_image_description(image_data)
+        describe_response = get_image_description(image_data)
         base_description = describe_response["descriptions"][0]["text"]
 
-        # Determine final prompt based on magic_prompt setting
-        if prompt:
-            final_prompt = f"{prompt}, in the style of {base_description}"
-        else:
-            final_prompt = base_description
-
         # Generate remixes
-        remix_response = await generate_remix(
-            image_data=image_data,
-            prompt=final_prompt,
-            magic_prompt_option="AUTO"
-        )
+        final_prompt = user_prompt if user_prompt else base_description
+        remix_response = generate_remix(image_data, final_prompt, magic_prompt)
 
-        # Prepare and send response blocks
+        # Prepare response blocks
         blocks = [
             {
                 "type": "header",
@@ -739,44 +723,28 @@ async def handle_recreation_submission(ack, body, client):
                 {"type": "divider"}
             ])
 
-        # Get channel ID from the context
-        channel_id = command_context.get("channel_id")
-        
-        # Determine response visibility based on channel
-        is_public_channel = channel_id == os.environ.get('PUBLIC_CHANNEL_ID')
-        response_type = "in_channel" if is_public_channel else "ephemeral"
-        
-        logger.info(f"Sending response - Channel: {channel_id}, Public: {is_public_channel}")
-        
-        # Send final response with appropriate visibility
-        await webhook_client.send(
-            text="Generated remixes",
-            blocks=blocks,
-            response_type=response_type,  # Now dynamic based on channel
-            replace_original=True,
-            unfurl_links=False,
-            unfurl_media=False
+        send_slack_response(
+            metadata["response_url"],
+            "Generated remixes",
+            blocks=blocks
         )
         
-        logger.info(f"Successfully sent remixes to Slack")
+        logger.info("Successfully sent remixes to Slack")
 
     except Exception as e:
         logger.error(f"Error in handle_recreation_submission: {str(e)}")
-        if response_url:
-            webhook_client = WebhookClient(url=response_url)
-            await webhook_client.send(
-                text=f"❌ Error: {str(e)}",
-                response_type="ephemeral",
-                replace_original=True
-            )
+        send_slack_response(
+            metadata["response_url"],
+            "Sorry, something went wrong while generating remixes."
+        )
 
-async def download_slack_image(url: str, headers: Dict[str, str]) -> bytes:
+def download_slack_image(url: str, headers: Dict[str, str]) -> bytes:
     """Download image from Slack's private URL"""
     response = requests.get(url, headers=headers)
     response.raise_for_status()
     return response.content
 
-async def get_image_description(image_data: bytes) -> Dict[str, Any]:
+def get_image_description(image_data: bytes) -> Dict[str, Any]:
     """Get image description from Ideogram API"""
     api_key = os.environ.get("IDEOGRAM_API_KEY")
     if not api_key:
@@ -794,7 +762,7 @@ async def get_image_description(image_data: bytes) -> Dict[str, Any]:
     response.raise_for_status()
     return response.json()
 
-async def generate_remix(
+def generate_remix(
     image_data: bytes,
     prompt: Optional[str],
     magic_prompt_option: str = "OFF"
@@ -806,19 +774,16 @@ async def generate_remix(
 
     headers = {'Api-Key': api_key}
     
-    # Prepare the image request data
-    image_request = {
-        "prompt": prompt if prompt else "",
-        "aspect_ratio": "ASPECT_10_16",
-        "model": "V_2",
-        "magic_prompt_option": magic_prompt_option,
-        "image_weight": 50
-    }
-    
     # Prepare multipart form data
     files = {
         'image_file': ('image.png', image_data),
-        'image_request': (None, json.dumps(image_request), 'application/json')
+        'image_request': (None, json.dumps({
+            'prompt': prompt if prompt else "",
+            'aspect_ratio': 'ASPECT_10_16',
+            'model': 'V_2',
+            'magic_prompt_option': magic_prompt_option,
+            'image_weight': 50
+        }))
     }
     
     logger.info("Making request to Ideogram Remix API...")
@@ -830,13 +795,9 @@ async def generate_remix(
     response.raise_for_status()
     return response.json()
 
-async def send_slack_response(
-    response_url: str,
-    text: str,
-    blocks: Optional[List[Dict[str, Any]]] = None
-) -> None:
+def send_slack_response(response_url: str, text: str, blocks: Optional[List[Dict]] = None) -> None:
     """Send response back to Slack"""
-    payload = {
+    data = {
         "text": text,
         "response_type": "ephemeral",
         "replace_original": True,
@@ -844,9 +805,9 @@ async def send_slack_response(
         "unfurl_media": False
     }
     if blocks:
-        payload["blocks"] = blocks
+        data["blocks"] = blocks
     
-    response = requests.post(response_url, json=payload)
+    response = requests.post(response_url, json=data)
     response.raise_for_status()
 
 def run_slack_app():
