@@ -794,21 +794,21 @@ def generate_remix(
     )
     response.raise_for_status()
     
-    # Parse the response
+    # Parse and log the response
     response_data = response.json()
+    logger.info("=== REMIX API RESPONSE ===")
+    logger.info(json.dumps(response_data, indent=2))
+    logger.info("========================")
     
-    # Check if the response contains the expected data
-    if 'result' not in response_data:
-        raise ValueError("Unexpected API response format")
-    
-    # Extract image URLs from the result
+    # Extract image URLs from the response
     image_urls = []
-    for image in response_data['result']:
-        if 'image_url' in image:
-            image_urls.append(image['image_url'])
+    if 'data' in response_data:
+        for item in response_data['data']:
+            if 'url' in item:
+                image_urls.append(item['url'])
     
     if not image_urls:
-        raise ValueError("No images generated in the response")
+        raise ValueError("No images found in response")
         
     return {"images": image_urls}
 
