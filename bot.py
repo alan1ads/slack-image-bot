@@ -371,61 +371,58 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
             'Accept': 'application/json'
         }
         
-        # Get image description first
+        # First get image description
         describe_response = get_image_description(image_file_content)
         base_description = describe_response.get('descriptions', [{}])[0].get('text', '')
+        logger.info(f"Base description: {base_description}")
         
-        # Prepare the remix request data
+        # Construct final prompt based on input and description
+        if prompt:
+            final_prompt = f"{prompt}. Style reference: {base_description}"
+        else:
+            final_prompt = base_description
+            
+        logger.info(f"Final prompt: {final_prompt}")
+        
+        # Prepare remix request
         request_data = {
-            'prompt': prompt if prompt else "Recreate this image with creative variations",
+            'prompt': final_prompt,
+            'magic_prompt': magic_prompt in ["ON", "AUTO"],
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
-            'magic_prompt_option': magic_prompt
+            'num_images': 4  # Request 4 variations
         }
         
-        data = {
-            'image_request': json.dumps(request_data)
-        }
+        logger.info(f"Sending request with data: {json.dumps(request_data, indent=2)}")
         
-        files = {
-            'image_file': ('image.png', image_file_content, 'image/png')
-        }
-        
-        logger.info("Making request to Ideogram Remix API...")
-        logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
-        
+        # Make remix request
         response = requests.post(
             'https://api.ideogram.ai/remix',
             headers=headers,
-            data=data,
-            files=files,
-            timeout=None
+            files={
+                'image_file': ('image.png', image_file_content, 'image/png'),
+                'image_request': ('request.json', json.dumps(request_data), 'application/json')
+            }
         )
         
         if response.status_code != 200:
-            logger.error(f"Failed to generate recreations. Status: {response.status_code}")
-            logger.error(f"Response content: {response.text}")
+            logger.error(f"Remix API error. Status: {response.status_code}")
+            logger.error(f"Response: {response.text}")
             return None
-        
+            
         response_json = response.json()
         logger.info(f"Remix API response: {json.dumps(response_json, indent=2)}")
         
         if 'data' in response_json and response_json['data']:
-            image_data = []
-            for image_info in response_json['data']:
-                if 'url' in image_info:
-                    image_prompt = (
-                        image_info.get('enhanced_prompt') or 
-                        image_info.get('prompt') or 
-                        prompt or 
-                        "Recreation variation"
-                    )
-                    image_data.append((image_info['url'], image_prompt))
+            image_data = [
+                (item['url'], item.get('enhanced_prompt', final_prompt))
+                for item in response_json['data']
+                if 'url' in item
+            ]
             
             logger.info(f"Successfully generated {len(image_data)} recreations")
             return image_data
             
-        logger.error("No image data in response")
         return None
         
     except Exception as e:
