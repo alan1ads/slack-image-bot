@@ -365,13 +365,13 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
 
     try:
         headers = {'Api-Key': api_key}
-        
-        # Get image description
         describe_response = get_image_description(image_file_content)
         base_description = describe_response.get('descriptions', [{}])[0].get('text', '')
         logger.info(f"Base description: {base_description}")
         
-        # Prepare remix request
+        # Set magic_prompt flag based on input
+        magic_prompt_enabled = magic_prompt.upper() in ["ON", "AUTO"]
+        
         request_data = {
             'prompt': prompt if prompt else base_description,
             'magic_prompt_option': magic_prompt,
@@ -381,7 +381,6 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
             'image_weight': 50
         }
         
-        # Make remix request
         files = {
             'image_file': ('image.png', image_file_content, 'image/png'),
             'image_request': ('request.json', json.dumps(request_data), 'application/json')
@@ -401,11 +400,9 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
             image_data = []
             for item in response_json['data']:
                 if 'url' in item:
-                    # Use the unique enhanced prompt for each image
-                    image_data.append((
-                        item['url'],
-                        item.get('prompt', base_description)
-                    ))
+                    # If magic prompt is off, use original prompt/description
+                    final_prompt = item.get('prompt', base_description) if magic_prompt_enabled else (prompt or base_description)
+                    image_data.append((item['url'], final_prompt))
                     
             logger.info(f"Successfully generated {len(image_data)} recreations")
             return image_data
