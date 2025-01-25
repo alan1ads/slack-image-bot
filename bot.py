@@ -292,11 +292,11 @@ def generate_midjourney_image(prompt):
         logger.error(f"Error in generate_midjourney_image: {str(e)}")
         return None
 
-def generate_ideogram_image(prompt, num_images=5):
+def generate_ideogram_image(prompt, num_images=5, magic_prompt="AUTO"):
     """
     Generate images using Ideogram API
     """
-    logger.info(f"Attempting to generate {num_images} images with prompt: {prompt}")
+    logger.info(f"Attempting to generate {num_images} images with prompt: {prompt} (Magic Prompt: {magic_prompt})")
     
     api_key = os.environ.get("IDEOGRAM_API_KEY")
     if not api_key:
@@ -313,7 +313,7 @@ def generate_ideogram_image(prompt, num_images=5):
             'prompt': prompt,
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
-            'magic_prompt_option': 'AUTO',
+            'magic_prompt_option': magic_prompt,
             'num_images': num_images
         }
     }
@@ -357,11 +357,11 @@ def generate_ideogram_image(prompt, num_images=5):
         logger.error(f"Error generating image: {str(e)}")
         return None
 
-def generate_ideogram_recreation(image_file_content, prompt=None):
+def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="AUTO"):
     """
     Generate recreations of an image using Ideogram Remix API
     """
-    logger.info("Starting image recreation with Ideogram")
+    logger.info(f"Starting image recreation with Ideogram (Magic Prompt: {magic_prompt})")
     
     api_key = os.environ.get('IDEOGRAM_API_KEY')
     if not api_key:
@@ -374,22 +374,21 @@ def generate_ideogram_recreation(image_file_content, prompt=None):
             'Accept': 'application/json'
         }
         
-        # Prepare the multipart/form-data request
-        files = {
-            'image_file': ('image.png', image_file_content, 'image/png')
-        }
-        
         # Prepare the remix request data
         request_data = {
             'prompt': prompt if prompt else "Recreate this image with creative variations",
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
-            'magic_prompt_option': 'AUTO'
+            'magic_prompt_option': magic_prompt
         }
         
         # Create proper multipart form data
         data = {
             'image_request': json.dumps(request_data)
+        }
+        
+        files = {
+            'image_file': ('image.png', image_file_content, 'image/png')
         }
         
         logger.info("Making request to Ideogram Remix API...")
@@ -455,8 +454,8 @@ def handle_generate_command(ack, respond, command, client):
     if not command_text:
         respond({
             "text": "Please specify a service and parameters:\n" +
-                   "1. Text generation: `/generate [ideogram|midjourney] your prompt`\n" +
-                   "2. Image remix: `/generate ideogram-remix` (attach an image) [optional prompt]",
+                   "1. Text generation: `/generate [ideogram|midjourney] [on|off|auto] your prompt`\n" +
+                   "2. Image remix: `/generate ideogram-remix [on|off|auto]` (attach an image) [optional prompt]",
             "response_type": "ephemeral"
         })
         return
@@ -472,6 +471,16 @@ def handle_generate_command(ack, respond, command, client):
         return
 
     try:
+        # Parse magic prompt option
+        magic_prompt = "AUTO"  # default
+        prompt_start = 1
+        
+        if len(parts) > 1 and parts[1].lower() in ['on', 'off', 'auto']:
+            magic_prompt = parts[1].upper()
+            prompt_start = 2
+            
+        prompt = " ".join(parts[prompt_start:]) if len(parts) > prompt_start else ""
+
         if service == 'ideogram-remix':
             try:
                 # Store the response_url for later use
@@ -479,6 +488,7 @@ def handle_generate_command(ack, respond, command, client):
                     "channel_id": command.get("channel_id"),
                     "user_id": command.get("user_id"),
                     "response_url": command.get("response_url"),
+                    "magic_prompt": magic_prompt,
                     "command_context": {
                         "channel_id": command.get("channel_id"),
                         "user_id": command.get("user_id"),
@@ -546,7 +556,6 @@ def handle_generate_command(ack, respond, command, client):
                 })
         else:
             # Handle other services (ideogram, midjourney)
-            prompt = ' '.join(parts[1:])
             if not prompt:
                 respond({
                     "text": f"Please provide a prompt for {service}.",
@@ -561,7 +570,7 @@ def handle_generate_command(ack, respond, command, client):
             })
             
             # Generate images based on selected service
-            result = generate_midjourney_image(prompt) if service == 'midjourney' else generate_ideogram_image(prompt)
+            result = generate_midjourney_image(prompt) if service == 'midjourney' else generate_ideogram_image(prompt, magic_prompt=magic_prompt)
             
             if result:
                 # Create blocks for each image
