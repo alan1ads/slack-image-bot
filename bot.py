@@ -762,11 +762,7 @@ def get_image_description(image_data: bytes) -> Dict[str, Any]:
     response.raise_for_status()
     return response.json()
 
-def generate_remix(
-    image_data: bytes,
-    prompt: Optional[str],
-    magic_prompt_option: str = "OFF"
-) -> Dict[str, Any]:
+def generate_remix(image_data: bytes, prompt: Optional[str], magic_prompt_option: str = "OFF") -> Dict[str, Any]:
     api_key = os.environ.get("IDEOGRAM_API_KEY")
     if not api_key:
         raise ValueError("IDEOGRAM_API_KEY not set")
@@ -780,24 +776,29 @@ def generate_remix(
         describe_response = requests.post(
             'https://api.ideogram.ai/describe',
             headers=headers,
-            files=files
+            files=files,
+            timeout=30
         )
         describe_response.raise_for_status()
         describe_data = describe_response.json()
+        logger.info(f"Describe API Response: {json.dumps(describe_data, indent=2)}")
         
         # Get base description from image
         base_description = describe_data.get('descriptions', [{}])[0].get('text', '')
+        logger.info(f"Base description: {base_description}")
         
         # Handle magic prompt based on option
         final_prompt = prompt if prompt else base_description
         if magic_prompt_option == "AUTO":
             magic_prompt = True
-            # Combine user prompt with image description for better results
             if prompt:
                 final_prompt = f"{prompt}. Base image shows: {base_description}"
         else:
             magic_prompt = magic_prompt_option == "ON"
-
+        
+        logger.info(f"Final prompt: {final_prompt}")
+        logger.info(f"Magic prompt setting: {magic_prompt}")
+        
         request_data = {
             'prompt': final_prompt,
             'magic_prompt': magic_prompt,
@@ -807,14 +808,17 @@ def generate_remix(
             'model': 'V_2'
         }
         
+        logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
         logger.info("Making request to Ideogram Remix API...")
+        
         response = requests.post(
             'https://api.ideogram.ai/remix',
             headers=headers,
             files={
                 'image_file': ('image.png', image_data, 'image/png'),
                 'image_request': (None, json.dumps(request_data))
-            }
+            },
+            timeout=60
         )
         response.raise_for_status()
         
@@ -823,7 +827,6 @@ def generate_remix(
         logger.info(json.dumps(response_data, indent=2))
         logger.info("========================")
         
-        # Extract image URLs from the response
         image_urls = []
         if 'data' in response_data:
             for item in response_data['data']:
@@ -832,8 +835,9 @@ def generate_remix(
         
         if not image_urls:
             raise ValueError("No images found in response")
-            
+        
         return {"images": image_urls}
+        
     except requests.exceptions.RequestException as e:
         logger.error(f"Remix API error: {str(e)}")
         if hasattr(e, 'response') and e.response is not None:
