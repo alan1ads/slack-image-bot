@@ -369,6 +369,7 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
         base_description = describe_response.get('descriptions', [{}])[0].get('text', '')
         logger.info(f"Base description: {base_description}")
         
+        # Set magic_prompt flag based on input
         magic_prompt_enabled = magic_prompt.upper() in ["ON", "AUTO"]
         
         request_data = {
@@ -397,12 +398,9 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
         
         if 'data' in response_json and response_json['data']:
             image_data = []
-            # Add base description as first item if no prompt provided
-            if not prompt:
-                image_data.append(('', f"🔍 Image Description: {base_description}"))
-            
             for item in response_json['data']:
                 if 'url' in item:
+                    # If magic prompt is off, use original prompt/description
                     final_prompt = item.get('prompt', base_description) if magic_prompt_enabled else (prompt or base_description)
                     image_data.append((item['url'], final_prompt))
                     
