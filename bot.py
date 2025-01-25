@@ -767,7 +767,6 @@ def generate_remix(
     prompt: Optional[str],
     magic_prompt_option: str = "OFF"
 ) -> Dict[str, Any]:
-    """Generate remixes using Ideogram API"""
     api_key = os.environ.get("IDEOGRAM_API_KEY")
     if not api_key:
         raise ValueError("IDEOGRAM_API_KEY not set")
@@ -786,13 +785,27 @@ def generate_remix(
         describe_response.raise_for_status()
         describe_data = describe_response.json()
         
-        # Prepare the remix request
+        # Get base description from image
+        base_description = describe_data.get('descriptions', [{}])[0].get('text', '')
+        
+        # Handle magic prompt based on option
+        final_prompt = prompt if prompt else base_description
+        if magic_prompt_option == "AUTO":
+            magic_prompt = True
+            # Combine user prompt with image description for better results
+            if prompt:
+                final_prompt = f"{prompt}. Base image shows: {base_description}"
+        else:
+            magic_prompt = magic_prompt_option == "ON"
+        
         request_data = {
-            'prompt': prompt if prompt else describe_data.get('descriptions', [{}])[0].get('text', ''),
-            'magic_prompt': magic_prompt_option == "ON",
-            'num_images': 4,  # Request 4 images
+            'prompt': final_prompt,
+            'magic_prompt': magic_prompt,
+            'num_images': 4,
             'resolution': "RESOLUTION_720_1280",
-            'image_weight': 50  # Balance between original image and prompt
+            'image_weight': 50,
+            'model': 'V_2',
+            'aspect_ratio': 'ASPECT_10_16'
         }
         
         logger.info("Making request to Ideogram Remix API...")
