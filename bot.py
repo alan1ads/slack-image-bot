@@ -793,7 +793,24 @@ def generate_remix(
         files=files
     )
     response.raise_for_status()
-    return response.json()
+    
+    # Parse the response
+    response_data = response.json()
+    
+    # Check if the response contains the expected data
+    if 'result' not in response_data:
+        raise ValueError("Unexpected API response format")
+    
+    # Extract image URLs from the result
+    image_urls = []
+    for image in response_data['result']:
+        if 'image_url' in image:
+            image_urls.append(image['image_url'])
+    
+    if not image_urls:
+        raise ValueError("No images generated in the response")
+        
+    return {"images": image_urls}
 
 def send_slack_response(response_url: str, text: str, blocks: Optional[List[Dict]] = None) -> None:
     """Send response back to Slack"""
