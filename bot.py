@@ -359,21 +359,21 @@ def generate_ideogram_image(prompt, num_images=5, magic_prompt="AUTO"):
         return None
 
 def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="AUTO"):
-    """
-    Generate recreations of an image using Ideogram Remix API
-    """
     logger.info(f"Starting image recreation with Ideogram (Magic Prompt: {magic_prompt})")
     
     api_key = os.environ.get('IDEOGRAM_API_KEY')
     if not api_key:
-        logger.error("IDEOGRAM_API_KEY not found")
-        return None
-    
+        raise ValueError("IDEOGRAM_API_KEY not set")
+
     try:
         headers = {
             'Api-Key': api_key,
             'Accept': 'application/json'
         }
+        
+        # Get image description first
+        describe_response = get_image_description(image_file_content)
+        base_description = describe_response.get('descriptions', [{}])[0].get('text', '')
         
         # Prepare the remix request data
         request_data = {
@@ -383,7 +383,6 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
             'magic_prompt_option': magic_prompt
         }
         
-        # Create proper multipart form data
         data = {
             'image_request': json.dumps(request_data)
         }
@@ -403,23 +402,18 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
             timeout=None
         )
         
-        logger.info(f"Remix API response status: {response.status_code}")
-        
         if response.status_code != 200:
             logger.error(f"Failed to generate recreations. Status: {response.status_code}")
             logger.error(f"Response content: {response.text}")
             return None
         
         response_json = response.json()
-        logger.info("=== REMIX API RESPONSE ===")
-        logger.info(json.dumps(response_json, indent=2))
-        logger.info("=========================")
+        logger.info(f"Remix API response: {json.dumps(response_json, indent=2)}")
         
         if 'data' in response_json and response_json['data']:
             image_data = []
             for image_info in response_json['data']:
                 if 'url' in image_info:
-                    # Use enhanced prompt if available, otherwise use original or default
                     image_prompt = (
                         image_info.get('enhanced_prompt') or 
                         image_info.get('prompt') or 
@@ -430,9 +424,9 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
             
             logger.info(f"Successfully generated {len(image_data)} recreations")
             return image_data
-        else:
-            logger.error("No image data in response")
-            return None
+            
+        logger.error("No image data in response")
+        return None
         
     except Exception as e:
         logger.error(f"Error in generate_ideogram_recreation: {str(e)}")
@@ -660,67 +654,46 @@ def handle_generate_command(ack, respond, command, client):
 
 @app.view("recreation_upload_modal")
 def handle_recreation_submission(ack, body, client):
-    """Handle the remix modal submission"""
     try:
-        # Acknowledge the request immediately
         ack()
         
-        # Extract metadata and context
         view = body["view"]
         metadata = json.loads(view["private_metadata"])
-        magic_prompt = metadata.get("magic_prompt", "ON")
+        magic_prompt = metadata.get("magic_prompt", "AUTO")
         
-        # Get uploaded file and prompt
         files = view["state"]["values"]["image_block"]["file_input"]["files"]
         user_prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value")
         
-        # Send initial response
         send_slack_response(metadata["response_url"], "Working on generating remixes...")
         
-        # Download the image
         file_info = client.files_info(file=files[0]["id"])
         headers = {"Authorization": f"Bearer {os.environ.get('SLACK_BOT_TOKEN')}"}
         image_data = download_slack_image(file_info["file"]["url_private"], headers)
-
-        # Get image description
-        describe_response = get_image_description(image_data)
-        base_description = describe_response["descriptions"][0]["text"]
-
-        # Generate remixes
-        final_prompt = user_prompt if user_prompt else base_description
-        remix_response = generate_remix(image_data, final_prompt, magic_prompt)
-
-        # Prepare response blocks
+        
+        remix_results = generate_ideogram_recreation(image_data, user_prompt, magic_prompt)
+        if not remix_results:
+            raise ValueError("Failed to generate remixes")
+            
         blocks = [
             {
                 "type": "header",
                 "text": {"type": "plain_text", "text": "🎨 Generated Remixes", "emoji": True}
-            },
-            {
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": f"*🔍 Image Description:*\n```{base_description}```"}
-            },
-            {"type": "divider"}
+            }
         ]
 
-        # Add each remix
-        for i, image_url in enumerate(remix_response["images"], 1):
+        for i, (image_url, prompt) in enumerate(remix_results, 1):
             blocks.extend([
+                {"type": "divider"},
                 {
                     "type": "section",
-                    "text": {"type": "mrkdwn", "text": f"*✨ Prompt for Remix {i}:*\n```{final_prompt}```"}
+                    "text": {"type": "mrkdwn", "text": f"*✨ Remix {i}:*\n```{prompt}```"}
                 },
                 {
                     "type": "image",
                     "title": {"type": "plain_text", "text": f"Remix {i}"},
                     "image_url": image_url,
                     "alt_text": f"Generated remix {i}"
-                },
-                {
-                    "type": "context",
-                    "elements": [{"type": "mrkdwn", "text": f"🔗 <{image_url}|Click to download remix {i}>"}]
-                },
-                {"type": "divider"}
+                }
             ])
 
         send_slack_response(
@@ -733,10 +706,11 @@ def handle_recreation_submission(ack, body, client):
 
     except Exception as e:
         logger.error(f"Error in handle_recreation_submission: {str(e)}")
-        send_slack_response(
-            metadata["response_url"],
-            "Sorry, something went wrong while generating remixes."
-        )
+        if metadata and metadata.get("response_url"):
+            send_slack_response(
+                metadata["response_url"],
+                f"Sorry, something went wrong: {str(e)}"
+            )
 
 def download_slack_image(url: str, headers: Dict[str, str]) -> bytes:
     """Download image from Slack's private URL"""
@@ -745,7 +719,6 @@ def download_slack_image(url: str, headers: Dict[str, str]) -> bytes:
     return response.content
 
 def get_image_description(image_data: bytes) -> Dict[str, Any]:
-    """Get image description from Ideogram API"""
     api_key = os.environ.get("IDEOGRAM_API_KEY")
     if not api_key:
         raise ValueError("IDEOGRAM_API_KEY not set")
@@ -760,89 +733,11 @@ def get_image_description(image_data: bytes) -> Dict[str, Any]:
         files=files
     )
     response.raise_for_status()
-    return response.json()
+    description_data = response.json()
+    logger.info(f"Description API response: {json.dumps(description_data, indent=2)}")
+    return description_data
 
-def generate_remix(image_data: bytes, prompt: Optional[str], magic_prompt_option: str = "OFF") -> Dict[str, Any]:
-    api_key = os.environ.get("IDEOGRAM_API_KEY")
-    if not api_key:
-        raise ValueError("IDEOGRAM_API_KEY not set")
 
-    headers = {'Api-Key': api_key}
-    
-    try:
-        # First get the description
-        logger.info("Making request to Ideogram Describe API...")
-        files = {'image_file': ('image.png', image_data, 'image/png')}
-        describe_response = requests.post(
-            'https://api.ideogram.ai/describe',
-            headers=headers,
-            files=files,
-            timeout=30
-        )
-        describe_response.raise_for_status()
-        describe_data = describe_response.json()
-        logger.info(f"Describe API Response: {json.dumps(describe_data, indent=2)}")
-        
-        # Get base description from image
-        base_description = describe_data.get('descriptions', [{}])[0].get('text', '')
-        logger.info(f"Base description: {base_description}")
-        
-        # Handle magic prompt based on option
-        final_prompt = prompt if prompt else base_description
-        if magic_prompt_option == "AUTO":
-            magic_prompt = True
-            if prompt:
-                final_prompt = f"{prompt}. Base image shows: {base_description}"
-        else:
-            magic_prompt = magic_prompt_option == "ON"
-        
-        logger.info(f"Final prompt: {final_prompt}")
-        logger.info(f"Magic prompt setting: {magic_prompt}")
-        
-        request_data = {
-            'prompt': final_prompt,
-            'magic_prompt': magic_prompt,
-            'num_images': 4,
-            'aspect_ratio': 'ASPECT_10_16',
-            'image_weight': 50,
-            'model': 'V_2'
-        }
-        
-        logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
-        logger.info("Making request to Ideogram Remix API...")
-        
-        response = requests.post(
-            'https://api.ideogram.ai/remix',
-            headers=headers,
-            files={
-                'image_file': ('image.png', image_data, 'image/png'),
-                'image_request': (None, json.dumps(request_data))
-            },
-            timeout=60
-        )
-        response.raise_for_status()
-        
-        response_data = response.json()
-        logger.info("=== REMIX API RESPONSE ===")
-        logger.info(json.dumps(response_data, indent=2))
-        logger.info("========================")
-        
-        image_urls = []
-        if 'data' in response_data:
-            for item in response_data['data']:
-                if 'url' in item:
-                    image_urls.append(item['url'])
-        
-        if not image_urls:
-            raise ValueError("No images found in response")
-        
-        return {"images": image_urls}
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Remix API error: {str(e)}")
-        if hasattr(e, 'response') and e.response is not None:
-            logger.error(f"Response content: {e.response.text}")
-        raise
 
 def send_slack_response(response_url: str, text: str, blocks: Optional[List[Dict]] = None) -> None:
     """Send response back to Slack"""
