@@ -607,7 +607,7 @@ def handle_generate_command(ack, respond, command, client):
                     "text": f"Generated {len(result)} images using {service.title()}",
                     "unfurl_links": False,
                     "unfurl_media": False,
-                    "response_type": "in_channel" if os.environ.get('PUBLIC_CHANNEL_ID') else "ephemeral",
+                    "response_type": "in_channel" if command['channel_id'] == os.environ.get('PUBLIC_CHANNEL_ID') else "ephemeral",
                     "replace_original": True
                 }
                 
@@ -645,7 +645,7 @@ def handle_recreation_submission(ack, body, client):
         files = view["state"]["values"]["image_block"]["file_input"]["files"]
         user_prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value")
         
-        send_slack_response(metadata["response_url"], "Working on generating remixes...")
+        send_slack_response(metadata["response_url"], "Working on generating remixes...", channel_id=metadata["channel_id"])
         
         file_info = client.files_info(file=files[0]["id"])
         headers = {"Authorization": f"Bearer {os.environ.get('SLACK_BOT_TOKEN')}"}
@@ -680,7 +680,8 @@ def handle_recreation_submission(ack, body, client):
         send_slack_response(
             metadata["response_url"],
             "Generated remixes",
-            blocks=blocks
+            blocks=blocks,
+            channel_id=metadata["channel_id"]
         )
         
         logger.info("Successfully sent remixes to Slack")
@@ -690,7 +691,8 @@ def handle_recreation_submission(ack, body, client):
         if metadata and metadata.get("response_url"):
             send_slack_response(
                 metadata["response_url"],
-                f"Sorry, something went wrong: {str(e)}"
+                f"Sorry, something went wrong: {str(e)}",
+                channel_id=metadata["channel_id"]
             )
 
 def download_slack_image(url: str, headers: Dict[str, str]) -> bytes:
@@ -718,13 +720,11 @@ def get_image_description(image_data: bytes) -> Dict[str, Any]:
     logger.info(f"Description API response: {json.dumps(description_data, indent=2)}")
     return description_data
 
-
-
-def send_slack_response(response_url: str, text: str, blocks: Optional[List[Dict]] = None) -> None:
+def send_slack_response(response_url: str, text: str, blocks: Optional[List[Dict]] = None, channel_id: Optional[str] = None) -> None:
     """Send response back to Slack"""
     data = {
         "text": text,
-        "response_type": "ephemeral",
+        "response_type": "in_channel" if channel_id == os.environ.get('PUBLIC_CHANNEL_ID') else "ephemeral",
         "replace_original": True,
         "unfurl_links": False,
         "unfurl_media": False
