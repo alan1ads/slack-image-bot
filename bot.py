@@ -400,7 +400,7 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
             image_data = []
             for item in response_json['data']:
                 if 'url' in item:
-                    # If magic prompt is off, use original prompt/description
+                    # Use the prompt from the API response if magic prompt is enabled
                     final_prompt = item.get('prompt', base_description) if magic_prompt_enabled else (prompt or base_description)
                     image_data.append((item['url'], final_prompt))
                     
