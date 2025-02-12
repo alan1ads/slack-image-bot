@@ -649,6 +649,11 @@ def handle_recreation_submission(ack, body, client):
         headers = {"Authorization": f"Bearer {os.environ.get('SLACK_BOT_TOKEN')}"}
         image_data = download_slack_image(file_info["file"]["url_private"], headers)
         
+        # Get description if no prompt is provided
+        if not user_prompt:
+            description_data = get_image_description(image_data)
+            user_prompt = description_data.get('descriptions', [{}])[0].get('text', 'No description available')
+        
         remix_results = generate_ideogram_recreation(image_data, user_prompt, magic_prompt)
         if not remix_results:
             raise ValueError("Failed to generate remixes")
