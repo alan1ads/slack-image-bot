@@ -358,22 +358,16 @@ def generate_ideogram_image(prompt, num_images=5, magic_prompt="AUTO"):
         logger.error(f"Error generating image: {str(e)}")
         return None
 
-def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="AUTO"):
+def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="ON"):
     api_key = os.environ.get('IDEOGRAM_API_KEY')
     if not api_key:
         raise ValueError("IDEOGRAM_API_KEY not set")
 
     try:
         headers = {'Api-Key': api_key}
-        describe_response = get_image_description(image_file_content)
-        base_description = describe_response.get('descriptions', [{}])[0].get('text', '')
-        logger.info(f"Base description: {base_description}")
-        
-        # Set magic_prompt flag based on input
-        magic_prompt_enabled = magic_prompt.upper() in ["ON", "AUTO"]
         
         request_data = {
-            'prompt': prompt if prompt else base_description,
+            'prompt': prompt,
             'magic_prompt_option': magic_prompt,
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
@@ -383,7 +377,7 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
         
         files = {
             'image_file': ('image.png', image_file_content, 'image/png'),
-            'image_request': ('request.json', json.dumps(request_data), 'application/json')
+            'image_request': (None, json.dumps(request_data), 'application/json')
         }
         
         response = requests.post(
@@ -394,17 +388,14 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
         
         response.raise_for_status()
         response_json = response.json()
-        logger.info(f"Remix API response: {json.dumps(response_json, indent=2)}")
         
         if 'data' in response_json and response_json['data']:
             image_data = []
             for item in response_json['data']:
                 if 'url' in item:
-                    # Use the prompt from the API response if magic prompt is enabled
-                    final_prompt = item.get('prompt', base_description) if magic_prompt_enabled else (prompt or base_description)
+                    final_prompt = item.get('prompt', prompt)
                     image_data.append((item['url'], final_prompt))
                     
-            logger.info(f"Successfully generated {len(image_data)} recreations")
             return image_data
             
         return None
