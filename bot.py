@@ -366,6 +366,10 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
     try:
         headers = {'Api-Key': api_key}
         
+        # Ensure prompt is not None
+        if not prompt:
+            prompt = "Default prompt if none provided"
+
         request_data = {
             'prompt': prompt,
             'magic_prompt_option': magic_prompt,
@@ -400,6 +404,9 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
             
         return None
         
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
+        return None
     except Exception as e:
         logger.error(f"Error in generate_ideogram_recreation: {str(e)}")
         return None
