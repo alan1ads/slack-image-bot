@@ -358,7 +358,7 @@ def generate_ideogram_image(prompt, num_images=5, magic_prompt="AUTO"):
         logger.error(f"Error generating image: {str(e)}")
         return None
 
-def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="ON"):
+def generate_ideogram_recreation(image_data, prompt=None, magic_prompt="ON"):
     api_key = os.environ.get('IDEOGRAM_API_KEY')
     if not api_key:
         raise ValueError("IDEOGRAM_API_KEY not set")
@@ -380,7 +380,7 @@ def generate_ideogram_recreation(image_file_content, prompt=None, magic_prompt="
         }
         
         files = {
-            'image_file': ('image.png', image_file_content, 'image/png'),
+            'image_file': ('image.png', image_data, 'image/png'),
             'image_request': (None, json.dumps(request_data), 'application/json')
         }
         
@@ -638,26 +638,41 @@ def handle_recreation_submission(ack, body, client):
         
         view = body["view"]
         metadata = json.loads(view["private_metadata"])
-        magic_prompt = metadata.get("magic_prompt", "ON")  # Ensure magic prompt is ON
+        magic_prompt = metadata.get("magic_prompt", "ON")  # Default to ON for remixes
         
         files = view["state"]["values"]["image_block"]["file_input"]["files"]
         user_prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value")
         
         send_slack_response(metadata["response_url"], "Working on generating remixes...", channel_id=metadata["channel_id"])
         
+        # Get the image data
         file_info = client.files_info(file=files[0]["id"])
         headers = {"Authorization": f"Bearer {os.environ.get('SLACK_BOT_TOKEN')}"}
         image_data = download_slack_image(file_info["file"]["url_private"], headers)
         
-        # Get description of the image
+        # Get description of the image using Describe API
         description_data = get_image_description(image_data)
         base_description = description_data.get('descriptions', [{}])[0].get('text', 'No description available')
+        logger.info(f"Base description: {base_description}")
         
-        # Use the user prompt if provided, otherwise use the base description
+        # Use user prompt if provided, otherwise use the base description
         prompt_to_use = user_prompt if user_prompt else base_description
         
-        # Generate remixes using the prompt
-        remix_results = generate_ideogram_recreation(image_data, prompt_to_use, magic_prompt)
+        # Call Remix API with magic_prompt option
+        remix_request = {
+            "prompt": prompt_to_use,
+            "aspect_ratio": "ASPECT_1_1",  # Or get from original image
+            "image_weight": 50,  # Default weight
+            "magic_prompt_option": magic_prompt,
+            "model": "V_2"
+        }
+        
+        # Generate remixes using the Remix API
+        remix_results = generate_ideogram_recreation(
+            image_data=image_data,
+            prompt=prompt_to_use,
+            magic_prompt=magic_prompt
+        )
         
         if not remix_results:
             raise ValueError("Failed to generate remixes")
@@ -669,6 +684,7 @@ def handle_recreation_submission(ack, body, client):
             }
         ]
 
+        # Display results with their unique prompts
         for i, (image_url, prompt) in enumerate(remix_results, 1):
             blocks.extend([
                 {"type": "divider"},
