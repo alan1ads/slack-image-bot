@@ -397,9 +397,16 @@ def generate_ideogram_recreation(image_data, prompt=None, magic_prompt="ON"):
             image_data = []
             for item in response_json['data']:
                 if 'url' in item:
-                    final_prompt = item.get('prompt', prompt)
+                    # Each item should have its own enhanced prompt when magic_prompt is ON
+                    # If no enhanced prompt is provided, fall back to the original prompt
+                    enhanced_prompt = item.get('prompt')
+                    if not enhanced_prompt and magic_prompt.upper() == "ON":
+                        # Log warning if we're not getting unique prompts as expected
+                        logger.warning("Magic prompt enabled but no unique prompt received from API")
+                    final_prompt = enhanced_prompt if enhanced_prompt else prompt
                     image_data.append((item['url'], final_prompt))
-                    
+                    logger.info(f"Processed remix with prompt: {final_prompt}")
+            
             return image_data
             
         return None
