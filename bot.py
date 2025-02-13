@@ -638,7 +638,7 @@ def handle_recreation_submission(ack, body, client):
         
         view = body["view"]
         metadata = json.loads(view["private_metadata"])
-        magic_prompt = metadata.get("magic_prompt", "AUTO")
+        magic_prompt = metadata.get("magic_prompt", "ON")  # Ensure magic prompt is ON
         
         files = view["state"]["values"]["image_block"]["file_input"]["files"]
         user_prompt = view["state"]["values"]["prompt_block"]["prompt_input"].get("value")
@@ -649,12 +649,16 @@ def handle_recreation_submission(ack, body, client):
         headers = {"Authorization": f"Bearer {os.environ.get('SLACK_BOT_TOKEN')}"}
         image_data = download_slack_image(file_info["file"]["url_private"], headers)
         
-        # Get description if no prompt is provided
-        if not user_prompt:
-            description_data = get_image_description(image_data)
-            user_prompt = description_data.get('descriptions', [{}])[0].get('text', 'No description available')
+        # Get description of the image
+        description_data = get_image_description(image_data)
+        base_description = description_data.get('descriptions', [{}])[0].get('text', 'No description available')
         
-        remix_results = generate_ideogram_recreation(image_data, user_prompt, magic_prompt)
+        # Use the user prompt if provided, otherwise use the base description
+        prompt_to_use = user_prompt if user_prompt else base_description
+        
+        # Generate remixes using the prompt
+        remix_results = generate_ideogram_recreation(image_data, prompt_to_use, magic_prompt)
+        
         if not remix_results:
             raise ValueError("Failed to generate remixes")
             
