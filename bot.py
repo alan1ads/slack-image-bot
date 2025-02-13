@@ -375,7 +375,7 @@ def generate_ideogram_recreation(image_data, prompt=None, magic_prompt="ON"):
             'magic_prompt_option': magic_prompt,
             'aspect_ratio': 'ASPECT_10_16',
             'model': 'V_2',
-            'num_images': 4,
+            'num_images': 5,
             'image_weight': 50
         }
         
