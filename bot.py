@@ -446,9 +446,9 @@ def generate_openai_image(prompt, num_images=5):
         'model': 'gpt-image-1',  # Explicitly set the model
         'prompt': prompt,
         'n': 5,  # Always generate 5 images
-        'size': '1024x1024',
-        'quality': 'standard',
-        'response_format': 'url'
+        'size': 'auto',
+        'quality': 'auto',
+        'background': 'auto'
     }
     
     try:
