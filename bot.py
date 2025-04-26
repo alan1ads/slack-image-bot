@@ -57,7 +57,8 @@ required_env_vars = [
     'MIDJOURNEY_CHANNEL_ID',
     'MIDJOURNEY_ACCOUNT_HASH',
     'MIDJOURNEY_TOKEN',
-    'PUBLIC_CHANNEL_ID'
+    'PUBLIC_CHANNEL_ID',
+    'OPENAI_API_KEY'
 ]
 
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]
@@ -418,6 +419,80 @@ def generate_ideogram_recreation(image_data, prompt=None, magic_prompt="ON"):
         logger.error(f"Error in generate_ideogram_recreation: {str(e)}")
         return None
 
+def generate_openai_image(prompt, num_images=5):
+    """
+    Generate images using OpenAI's GPT-image-1 API
+    
+    Args:
+        prompt (str): The prompt for image generation
+        num_images (int): Number of images to generate (default: 5)
+    
+    Returns:
+        list: List of tuples containing (image_url, prompt)
+    """
+    logger.info(f"Attempting to generate {num_images} images with GPT-image-1. Prompt: {prompt}")
+    
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        logger.error("OPENAI_API_KEY is not set in environment variables")
+        return None
+        
+    headers = {
+        'Authorization': f'Bearer {api_key}',
+        'Content-Type': 'application/json'
+    }
+    
+    data = {
+        'model': 'gpt-image-1',  # Explicitly set the model
+        'prompt': prompt,
+        'n': 5,  # Always generate 5 images
+        'size': '1024x1024',
+        'quality': 'standard',
+        'response_format': 'url'
+    }
+    
+    try:
+        logger.info("Making request to OpenAI API for 5 images...")
+        logger.debug(f"Request data: {json.dumps(data, indent=2)}")
+        
+        response = requests.post(
+            'https://api.openai.com/v1/images/generations',
+            headers=headers,
+            json=data
+        )
+        
+        # Log the response (without sensitive data)
+        logger.info(f"Received response from OpenAI API. Status code: {response.status_code}")
+        
+        if response.status_code != 200:
+            logger.error(f"OpenAI API error. Status code: {response.status_code}")
+            logger.error(f"Response content: {response.text}")
+            return None
+            
+        response_json = response.json()
+        
+        # Debug log the structure of the response
+        logger.debug(f"Response structure: {json.dumps(response_json, indent=2)}")
+        
+        if 'data' in response_json and response_json['data']:
+            image_urls = []
+            for image_data in response_json['data']:
+                if 'url' in image_data:
+                    # OpenAI doesn't return enhanced prompts, so we use the original
+                    image_urls.append((image_data['url'], prompt))
+            
+            logger.info(f"Successfully extracted {len(image_urls)} image URLs from response")
+            
+            return image_urls
+        else:
+            logger.error("No image data found in response")
+            return None
+        
+    except Exception as e:
+        logger.error(f"Error generating image: {str(e)}")
+        traceback.print_exc()
+        return None
+
 @app.command("/generate")
 def handle_generate_command(ack, respond, command, client):
     """Handle the /generate slash command"""
@@ -435,7 +510,7 @@ def handle_generate_command(ack, respond, command, client):
     if not command_text:
         respond({
             "text": "Please specify a service and parameters:\n" +
-                   "1. Text generation: `/generate [ideogram|midjourney] [on|off|auto] your prompt`\n" +
+                   "1. Text generation: `/generate [ideogram|midjourney|gpt] [on|off|auto] your prompt`\n" +
                    "2. Image remix: `/generate ideogram-remix [on|off|auto]` (attach an image) [optional prompt]",
             "response_type": "ephemeral"
         })
@@ -444,9 +519,13 @@ def handle_generate_command(ack, respond, command, client):
     parts = command_text.split()
     service = parts[0].lower()
     
-    if service not in ['ideogram', 'midjourney', 'ideogram-remix']:
+    # Allow "gpt" as a shorthand for "gpt-image-1"
+    if service == 'gpt':
+        service = 'gpt-image-1'
+    
+    if service not in ['ideogram', 'midjourney', 'ideogram-remix', 'gpt-image-1']:
         respond({
-            "text": "Please specify a valid service: 'ideogram', 'midjourney', or 'ideogram-remix'",
+            "text": "Please specify a valid service: 'ideogram', 'midjourney', 'gpt', or 'ideogram-remix'",
             "response_type": "ephemeral"
         })
         return
@@ -551,7 +630,12 @@ def handle_generate_command(ack, respond, command, client):
             })
             
             # Generate images based on selected service
-            result = generate_midjourney_image(prompt) if service == 'midjourney' else generate_ideogram_image(prompt, magic_prompt=magic_prompt)
+            if service == 'midjourney':
+                result = generate_midjourney_image(prompt)
+            elif service == 'gpt-image-1':
+                result = generate_openai_image(prompt)
+            else:  # ideogram
+                result = generate_ideogram_image(prompt, magic_prompt=magic_prompt)
             
             if result:
                 # Create blocks for each image
