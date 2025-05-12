@@ -417,7 +417,7 @@ def generate_ideogram_recreation(image_data, prompt=None, magic_prompt="ON"):
         logger.error(f"Error in generate_ideogram_recreation: {str(e)}")
         return None
 
-def generate_openai_image(prompt, num_images=4, size="1024x1024"):
+def generate_openai_image(prompt, num_images=5, size="1024x1024"):
     """
     Generate images using OpenAI's GPT-Image-1 model
     """
@@ -497,11 +497,15 @@ def upload_file_to_slack(file_path):
         from slack_sdk.web import WebClient
         client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
         
+        # Read file content as bytes
         with open(file_path, "rb") as file_content:
-            response = client.files_upload_v2(
-                content=file_content,
-                filename=os.path.basename(file_path)
-            )
+            file_bytes = file_content.read()
+            
+        # Upload with the correct parameters
+        response = client.files_upload_v2(
+            file=file_bytes,
+            filename=os.path.basename(file_path)
+        )
         return response
     except Exception as e:
         logger.error(f"Error uploading file to Slack: {str(e)}")
