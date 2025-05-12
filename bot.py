@@ -48,7 +48,16 @@ flask_app = Flask(__name__)
 
 @flask_app.route('/')
 def health_check():
-    return jsonify({"status": "healthy"})
+    return jsonify({
+        "status": "healthy",
+        "slack_connected": hasattr(app, "client") and app.client is not None,
+        "version": "1.0.0",
+        "timestamp": time.time()
+    })
+
+@flask_app.route('/ping')
+def ping():
+    return "pong", 200
 
 # Validate required environment variables
 required_env_vars = [
@@ -966,13 +975,16 @@ if __name__ == "__main__":
     try:
         # Start Slack app in a separate thread
         slack_thread = threading.Thread(target=run_slack_app)
+        slack_thread.daemon = True  # Make thread exit when main thread exits
         slack_thread.start()
         logger.info("⚡️ Socket Mode Handler initialized successfully")
         logger.info("⚡️ Slack bot is starting up...")
         
         # Start Flask app
         port = int(os.environ.get("PORT", 8080))
-        flask_app.run(host='0.0.0.0', port=port)
+        logger.info(f"Starting Flask app on port {port}")
+        flask_app.run(host='0.0.0.0', port=port, debug=False)
     except Exception as e:
         logger.error(f"Failed to start the bot: {str(e)}")
+        traceback.print_exc()  # Print full traceback for better error diagnosis
         raise
