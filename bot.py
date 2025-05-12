@@ -429,8 +429,15 @@ def generate_openai_image(prompt, num_images=4, size="1024x1024"):
         return None
     
     try:
-        # Initialize OpenAI client
-        client = OpenAI(api_key=api_key)
+        # Initialize OpenAI client without proxy settings
+        import httpx
+        client = OpenAI(
+            api_key=api_key,
+            http_client=httpx.Client(
+                proxies=None,
+                timeout=60.0
+            )
+        )
         
         # Call the OpenAI API to generate images
         response = client.images.generate(
