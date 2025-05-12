@@ -432,11 +432,14 @@ def generate_ideogram_recreation(image_data, prompt=None, magic_prompt="ON"):
         logger.error(f"Error in generate_ideogram_recreation: {str(e)}")
         return None
 
-def generate_openai_image(prompt, num_images=4, size="auto"):
+def generate_openai_image(prompt, num_images=5, size="auto"):
     """
     Generate images using OpenAI's GPT-Image-1 model
     """
     logger.info(f"Generating OpenAI GPT-Image-1 image for prompt: {prompt}, requesting {num_images} images")
+    
+    # Force requesting exactly 5 images
+    num_images = 5
     
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -455,7 +458,7 @@ def generate_openai_image(prompt, num_images=4, size="auto"):
         )
         
         # Call the OpenAI API to generate images
-        logger.info(f"Sending request to OpenAI API with size={size}")
+        logger.info(f"Sending request to OpenAI API with size={size}, n={num_images}")
         response = client.images.generate(
             model="gpt-image-1",
             prompt=prompt,
@@ -470,10 +473,12 @@ def generate_openai_image(prompt, num_images=4, size="auto"):
         for i, image in enumerate(response.data):
             # OpenAI returns base64 encoded images in b64_json field
             if hasattr(image, 'b64_json') and image.b64_json:
-                # Save base64 data directly instead of using data URIs
-                base64_data = image.b64_json
+                # Create data URI
+                data_uri = f"data:image/png;base64,{image.b64_json}"
+                
+                # Create an enhanced prompt with details about this specific image
                 enhanced_prompt = f"{prompt}\n\nGenerated with OpenAI GPT-Image-1"
-                image_data.append((base64_data, enhanced_prompt))  # Store base64 data directly
+                image_data.append((data_uri, enhanced_prompt))
                 logger.info(f"Successfully processed image {i+1}")
             else:
                 logger.warning(f"Image {i+1} doesn't have b64_json data")
@@ -497,11 +502,10 @@ def post_openai_images_to_slack(client, command, prompt, result, respond):
     try:
         # Determine if this should be ephemeral or in-channel
         is_public_channel = command['channel_id'] == os.environ.get('PUBLIC_CHANNEL_ID')
-        response_type = "in_channel" if is_public_channel else "ephemeral"
         
-        logger.info(f"Posting OpenAI images to channel {command['channel_id']} (public: {is_public_channel}, response_type: {response_type})")
+        logger.info(f"Posting OpenAI images to channel {command['channel_id']} (public: {is_public_channel})")
         
-        # Send header message with appropriate visibility
+        # Create header blocks
         header_blocks = [
             {
                 "type": "header",
@@ -520,30 +524,37 @@ def post_openai_images_to_slack(client, command, prompt, result, respond):
             }
         ]
         
-        # Send the header message with correct visibility
-        client.chat_postMessage(
-            channel=command['channel_id'],
-            blocks=header_blocks,
-            text=f"Generated {len(result)} images using OpenAI",
-            response_type=response_type  # Set proper visibility
-        )
+        # For public channels use chat_postMessage, for private use respond with ephemeral
+        if is_public_channel:
+            # Public channel - post message publicly
+            client.chat_postMessage(
+                channel=command['channel_id'],
+                blocks=header_blocks,
+                text=f"Generated {len(result)} images using OpenAI"
+            )
+        else:
+            # Private channel - post as ephemeral
+            respond({
+                "blocks": header_blocks,
+                "text": f"Generated {len(result)} images using OpenAI",
+                "response_type": "ephemeral",
+                "replace_original": True
+            })
         
-        # Use Slack file upload API for each image instead of data URIs
-        for i, (base64_data, enhanced_prompt) in enumerate(result, 1):
+        # Process images and upload files
+        for i, (image_url, enhanced_prompt) in enumerate(result, 1):
             try:
-                # Convert base64 to binary data
-                image_binary = base64.b64decode(base64_data)
-                
-                # Upload image to Slack
-                upload_result = client.files_upload_v2(
-                    channel=command['channel_id'],
-                    content=image_binary,
+                # Upload the image to Slack with the enhanced prompt
+                upload_result = client.files_upload(
+                    channels=command['channel_id'],
+                    content=base64.b64decode(image_url) if image_url.startswith("data:") else None,
+                    file=None if image_url.startswith("data:") else image_url,
                     filename=f"openai-image-{i}.png",
                     title=f"OpenAI Generated Image {i}",
                     initial_comment=f"*✨ Enhanced Prompt for Image {i}:*\n```{enhanced_prompt}```"
                 )
                 
-                logger.info(f"Successfully uploaded image {i} to Slack: {upload_result.get('file', {}).get('id')}")
+                logger.info(f"Successfully uploaded image {i} to Slack")
                 
             except Exception as e:
                 logger.error(f"Error uploading image {i}: {str(e)}")
@@ -551,7 +562,7 @@ def post_openai_images_to_slack(client, command, prompt, result, respond):
         # Update initial message
         respond({
             "text": f"✅ Successfully generated {len(result)} images with OpenAI",
-            "response_type": "ephemeral",  # Always ephemeral for the status update
+            "response_type": "ephemeral",
             "replace_original": True
         })
         
@@ -703,7 +714,16 @@ def handle_generate_command(ack, respond, command, client):
                 # Generate OpenAI images
                 result = generate_openai_image(prompt)
                 if result:
-                    post_openai_images_to_slack(client, command, prompt, result, respond)
+                    # Use the special handler for OpenAI images
+                    success = post_openai_images_to_slack(client, command, prompt, result, respond)
+                    if not success:
+                        error_msg = "Sorry, I couldn't display the images from OpenAI. Please try again."
+                        logger.error(error_msg)
+                        respond({
+                            "text": error_msg,
+                            "response_type": "ephemeral",
+                            "replace_original": True
+                        })
                     return  # Exit after handling OpenAI images
                 else:
                     error_msg = "Sorry, I couldn't generate the images using OpenAI. Please try again."
