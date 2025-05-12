@@ -473,12 +473,14 @@ def generate_openai_image(prompt, num_images=5, size="auto"):
         for i, image in enumerate(response.data):
             # OpenAI returns base64 encoded images in b64_json field
             if hasattr(image, 'b64_json') and image.b64_json:
-                # Create data URI
-                data_uri = f"data:image/png;base64,{image.b64_json}"
+                # Store the raw base64 data - no formatting or URI prefix
+                raw_base64 = image.b64_json
                 
-                # Create an enhanced prompt with details about this specific image
+                # Add enhanced prompt
                 enhanced_prompt = f"{prompt}\n\nGenerated with OpenAI GPT-Image-1"
-                image_data.append((data_uri, enhanced_prompt))
+                
+                # Store the raw base64 data and enhanced prompt
+                image_data.append((raw_base64, enhanced_prompt))
                 logger.info(f"Successfully processed image {i+1}")
             else:
                 logger.warning(f"Image {i+1} doesn't have b64_json data")
@@ -542,17 +544,40 @@ def post_openai_images_to_slack(client, command, prompt, result, respond):
             })
         
         # Process images and upload files
-        for i, (image_url, enhanced_prompt) in enumerate(result, 1):
+        for i, (base64_data, enhanced_prompt) in enumerate(result, 1):
             try:
-                # Upload the image to Slack with the enhanced prompt
+                # Create a temporary file to hold the image
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp_file:
+                    # Decode the base64 data - correctly handling the raw base64 string
+                    # Make sure we're working with just the base64 data, not a data URI
+                    if isinstance(base64_data, str) and base64_data.startswith('data:'):
+                        # Extract just the base64 part from the data URI
+                        base64_content = base64_data.split(',')[1]
+                    else:
+                        # Use the data as-is if it's already just base64
+                        base64_content = base64_data
+                    
+                    # Decode the base64 content
+                    try:
+                        image_bytes = base64.b64decode(base64_content)
+                        temp_file.write(image_bytes)
+                        temp_file_path = temp_file.name
+                        logger.info(f"Successfully wrote image {i} to temporary file {temp_file_path}")
+                    except Exception as decode_error:
+                        logger.error(f"Error decoding base64 for image {i}: {str(decode_error)}")
+                        continue
+                
+                # Upload the file to Slack
                 upload_result = client.files_upload(
                     channels=command['channel_id'],
-                    content=base64.b64decode(image_url) if image_url.startswith("data:") else None,
-                    file=None if image_url.startswith("data:") else image_url,
+                    file=temp_file_path,
                     filename=f"openai-image-{i}.png",
                     title=f"OpenAI Generated Image {i}",
                     initial_comment=f"*✨ Enhanced Prompt for Image {i}:*\n```{enhanced_prompt}```"
                 )
+                
+                # Remove the temporary file after uploading
+                os.unlink(temp_file_path)
                 
                 logger.info(f"Successfully uploaded image {i} to Slack")
                 
@@ -570,6 +595,7 @@ def post_openai_images_to_slack(client, command, prompt, result, respond):
         return True
     except Exception as e:
         logger.error(f"Error posting OpenAI images: {str(e)}")
+        traceback.print_exc()  # Add full stack trace for better debugging
         respond({
             "text": f"Error displaying images: {str(e)}",
             "response_type": "ephemeral",
