@@ -512,6 +512,88 @@ def upload_file_to_slack(file_path):
         logger.error(f"Error uploading file to Slack: {str(e)}")
         return None
 
+def post_openai_images_to_slack(client, command, prompt, result, respond):
+    """
+    Special handler for posting OpenAI images to Slack in separate messages
+    to avoid block size limits.
+    """
+    try:
+        # Send header first
+        header_blocks = [
+            {
+                "type": "header",
+                "text": {
+                    "type": "plain_text", 
+                    "text": f"🎨 Generated {len(result)} images using OpenAI",
+                    "emoji": True
+                }
+            },
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*📝 Original Prompt:*\n```{prompt}```"
+                }
+            }
+        ]
+        
+        # Send the header message
+        client.chat_postMessage(
+            channel=command['channel_id'],
+            blocks=header_blocks,
+            text=f"Generated {len(result)} images using OpenAI",
+            unfurl_links=False,
+            unfurl_media=False
+        )
+        
+        # Send each image as a separate message
+        for i, (image_url, enhanced_prompt) in enumerate(result, 1):
+            image_blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*✨ Image {i} of {len(result)}*"
+                    }
+                },
+                {
+                    "type": "image",
+                    "title": {
+                        "type": "plain_text",
+                        "text": f"Generated Image {i}"
+                    },
+                    "image_url": image_url,
+                    "alt_text": f"AI generated image {i}"
+                }
+            ]
+            
+            # Send single image message
+            client.chat_postMessage(
+                channel=command['channel_id'],
+                blocks=image_blocks,
+                text=f"OpenAI generated image {i}",
+                unfurl_links=False,
+                unfurl_media=False
+            )
+            
+        # Update the initial message
+        respond({
+            "text": f"✅ Successfully generated {len(result)} images with OpenAI",
+            "response_type": "ephemeral",
+            "replace_original": True
+        })
+        
+        logger.info(f"Successfully sent {len(result)} OpenAI images to Slack")
+        return True
+    except Exception as e:
+        logger.error(f"Error posting OpenAI images: {str(e)}")
+        respond({
+            "text": f"Error displaying images: {str(e)}",
+            "response_type": "ephemeral",
+            "replace_original": True
+        })
+        return False
+
 @app.command("/generate")
 def handle_generate_command(ack, respond, command, client):
     """Handle the /generate slash command"""
@@ -644,11 +726,26 @@ def handle_generate_command(ack, respond, command, client):
                 "response_type": "ephemeral"
             })
             
-            # Generate images based on selected service
+            # Handle OpenAI separately to avoid block size limits
+            if service == 'openai':
+                # Generate OpenAI images
+                result = generate_openai_image(prompt)
+                if result:
+                    post_openai_images_to_slack(client, command, prompt, result, respond)
+                    return  # Exit after handling OpenAI images
+                else:
+                    error_msg = "Sorry, I couldn't generate the images using OpenAI. Please try again."
+                    logger.error(error_msg)
+                    respond({
+                        "text": error_msg,
+                        "response_type": "ephemeral",
+                        "replace_original": True
+                    })
+                    return  # Exit after error handling
+                
+            # Handle other services (ideogram, midjourney) with the original code
             if service == 'midjourney':
                 result = generate_midjourney_image(prompt)
-            elif service == 'openai':
-                result = generate_openai_image(prompt)
             else:
                 result = generate_ideogram_image(prompt, magic_prompt=magic_prompt)
             
