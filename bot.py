@@ -450,31 +450,21 @@ def generate_openai_image(prompt, num_images=5, size="auto"):
         
         logger.info(f"Received response from OpenAI API with {len(response.data)} images")
         
-        # Process the generated images
+        # Process the generated images - store them as temporary files and serve them via S3 or similar
         image_data = []
         for i, image in enumerate(response.data):
             # OpenAI returns base64 encoded images in b64_json field
             if hasattr(image, 'b64_json') and image.b64_json:
-                # Generate a unique filename
-                filename = f"openai_image_{int(time.time())}_{i}.png"
-                temp_dir = tempfile.mkdtemp()
-                filepath = os.path.join(temp_dir, filename)
-                
-                # Decode and save the image
-                with open(filepath, "wb") as f:
-                    f.write(base64.b64decode(image.b64_json))
-                
-                # Upload image to Slack
-                upload_response = upload_file_to_slack(filepath)
-                if upload_response and "file" in upload_response and "url_private" in upload_response["file"]:
-                    image_url = upload_response["file"]["url_private"]
-                    image_data.append((image_url, prompt))
-                    logger.info(f"Successfully uploaded image {i+1} to Slack")
+                # For each image we'll create a publicly accessible URL - mimic Ideogram approach
+                # Instead of using Slack's file system
+                image_url = upload_image_to_temp_hosting(image.b64_json, i)
+                if image_url:
+                    # Create an enhanced prompt with details about this specific image
+                    enhanced_prompt = f"{prompt}\n\nGenerated with OpenAI GPT-Image-1"
+                    image_data.append((image_url, enhanced_prompt))
+                    logger.info(f"Successfully processed image {i+1}")
                 else:
-                    logger.error(f"Failed to upload image {i+1} to Slack")
-                
-                # Clean up temporary files
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                    logger.error(f"Failed to process image {i+1}")
             else:
                 logger.warning(f"Image {i+1} doesn't have b64_json data")
         
@@ -490,35 +480,29 @@ def generate_openai_image(prompt, num_images=5, size="auto"):
         traceback.print_exc()
         return None
 
-def upload_file_to_slack(file_path):
+def upload_image_to_temp_hosting(base64_data, index):
     """
-    Upload a file to Slack and return the response
+    Upload base64 image data to a temporary hosting service or convert to a data URI
+    This creates a similar experience to how Ideogram URLs work
     """
     try:
-        from slack_sdk.web import WebClient
-        client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
+        # For simplicity, we'll use a data URI scheme which works in modern browsers
+        # This embeds the image data directly in the URL
+        data_uri = f"data:image/png;base64,{base64_data}"
         
-        # Read file content as bytes
-        with open(file_path, "rb") as file_content:
-            file_bytes = file_content.read()
-            
-        # Upload with the correct parameters
-        response = client.files_upload_v2(
-            file=file_bytes,
-            filename=os.path.basename(file_path)
-        )
-        return response
+        # In a production environment, you might want to upload to S3, imgur, or similar
+        # For now, we'll return the data URI
+        return data_uri
     except Exception as e:
-        logger.error(f"Error uploading file to Slack: {str(e)}")
+        logger.error(f"Error creating data URI: {str(e)}")
         return None
 
 def post_openai_images_to_slack(client, command, prompt, result, respond):
     """
-    Special handler for posting OpenAI images to Slack in separate messages
-    to avoid block size limits.
+    Special handler for posting OpenAI images to Slack
     """
     try:
-        # Send header first
+        # Send header message
         header_blocks = [
             {
                 "type": "header",
@@ -541,59 +525,59 @@ def post_openai_images_to_slack(client, command, prompt, result, respond):
         client.chat_postMessage(
             channel=command['channel_id'],
             blocks=header_blocks,
-            text=f"Generated {len(result)} images using OpenAI",
-            unfurl_links=False,
-            unfurl_media=False
+            text=f"Generated {len(result)} images using OpenAI"
         )
         
-        # Send each image separately with proper attachment
+        # Combine all images into one message with blocks like Ideogram does
+        image_blocks = []
+        
         for i, (image_url, enhanced_prompt) in enumerate(result, 1):
-            # Make files public to avoid redirect issues
-            try:
-                # Extract file ID from URL
-                file_id = image_url.split('/')[-2]
-                client.files_sharedPublicURL(file=file_id)
-            except Exception as e:
-                logger.warning(f"Could not make file public: {str(e)}")
-            
-            # For each image, create a message with attachment and blocks
-            image_blocks = [
+            # Add each image with its enhanced prompt
+            image_blocks.extend([
                 {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*✨ Image {i} of {len(result)}*"
-                    }
+                    "type": "divider"
                 },
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"<{image_url}|View Image {i}>"
-                    },
-                    "accessory": {
-                        "type": "button",
-                        "text": {
-                            "type": "plain_text",
-                            "text": "Download",
-                            "emoji": True
-                        },
-                        "url": image_url,
-                        "action_id": f"download_image_{i}"
+                        "text": f"*✨ Enhanced Prompt for Image {i}:*\n```{enhanced_prompt}```"
                     }
+                },
+                {
+                    "type": "image",
+                    "title": {
+                        "type": "plain_text",
+                        "text": f"Generated Image {i}"
+                    },
+                    "image_url": image_url,
+                    "alt_text": f"AI generated image {i}"
+                },
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": f"🔗 <{image_url}|Click to download image {i}>"
+                        }
+                    ]
                 }
-            ]
-            
-            # Post with rich blocks
-            client.chat_postMessage(
-                channel=command['channel_id'],
-                blocks=image_blocks,
-                text=f"OpenAI generated image {i}: {image_url}",
-                unfurl_links=True,
-                unfurl_media=True
-            )
+            ])
         
-        # Update the initial "working on it" message
+        # Send images in a separate message (like Ideogram) to avoid block limits
+        for i in range(0, len(image_blocks), 20):  # Send in chunks of 20 blocks to avoid size limits
+            chunk = image_blocks[i:i+20]
+            if chunk:
+                try:
+                    client.chat_postMessage(
+                        channel=command['channel_id'],
+                        blocks=chunk,
+                        text=f"OpenAI generated images (part {i//20 + 1})"
+                    )
+                except Exception as e:
+                    logger.error(f"Error posting image chunk: {str(e)}")
+        
+        # Update initial message
         respond({
             "text": f"✅ Successfully generated {len(result)} images with OpenAI",
             "response_type": "ephemeral",
