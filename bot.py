@@ -14,7 +14,9 @@ import tempfile
 import shutil
 from pathlib import Path
 import traceback
+import base64
 from typing import Optional, Dict, Any, Tuple, List
+from openai import OpenAI
 
 # Configure logging
 logging.basicConfig(
@@ -57,7 +59,8 @@ required_env_vars = [
     'MIDJOURNEY_CHANNEL_ID',
     'MIDJOURNEY_ACCOUNT_HASH',
     'MIDJOURNEY_TOKEN',
-    'PUBLIC_CHANNEL_ID'
+    'PUBLIC_CHANNEL_ID',
+    'OPENAI_API_KEY'
 ]
 
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]
@@ -414,6 +417,89 @@ def generate_ideogram_recreation(image_data, prompt=None, magic_prompt="ON"):
         logger.error(f"Error in generate_ideogram_recreation: {str(e)}")
         return None
 
+def generate_openai_image(prompt, num_images=4, size="1024x1024"):
+    """
+    Generate images using OpenAI's GPT-Image-1 model
+    """
+    logger.info(f"Generating OpenAI GPT-Image-1 image for prompt: {prompt}, requesting {num_images} images")
+    
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        logger.error("OPENAI_API_KEY is not set in environment variables")
+        return None
+    
+    try:
+        # Initialize OpenAI client
+        client = OpenAI(api_key=api_key)
+        
+        # Call the OpenAI API to generate images
+        response = client.images.generate(
+            model="gpt-image-1",
+            prompt=prompt,
+            n=num_images,
+            size=size
+        )
+        
+        logger.info(f"Received response from OpenAI API with {len(response.data)} images")
+        
+        # Process the generated images
+        image_data = []
+        for i, image in enumerate(response.data):
+            # OpenAI returns base64 encoded images in b64_json field
+            if hasattr(image, 'b64_json') and image.b64_json:
+                # Generate a unique filename
+                filename = f"openai_image_{int(time.time())}_{i}.png"
+                temp_dir = tempfile.mkdtemp()
+                filepath = os.path.join(temp_dir, filename)
+                
+                # Decode and save the image
+                with open(filepath, "wb") as f:
+                    f.write(base64.b64decode(image.b64_json))
+                
+                # Upload image to Slack
+                upload_response = upload_file_to_slack(filepath)
+                if upload_response and "file" in upload_response and "url_private" in upload_response["file"]:
+                    image_url = upload_response["file"]["url_private"]
+                    image_data.append((image_url, prompt))
+                    logger.info(f"Successfully uploaded image {i+1} to Slack")
+                else:
+                    logger.error(f"Failed to upload image {i+1} to Slack")
+                
+                # Clean up temporary files
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            else:
+                logger.warning(f"Image {i+1} doesn't have b64_json data")
+        
+        if image_data:
+            logger.info(f"Successfully processed {len(image_data)} images from OpenAI")
+            return image_data
+        else:
+            logger.error("No images were successfully processed")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error in generate_openai_image: {str(e)}")
+        traceback.print_exc()
+        return None
+
+def upload_file_to_slack(file_path):
+    """
+    Upload a file to Slack and return the response
+    """
+    try:
+        from slack_sdk.web import WebClient
+        client = WebClient(token=os.environ.get("SLACK_BOT_TOKEN"))
+        
+        with open(file_path, "rb") as file_content:
+            response = client.files_upload_v2(
+                content=file_content,
+                filename=os.path.basename(file_path)
+            )
+        return response
+    except Exception as e:
+        logger.error(f"Error uploading file to Slack: {str(e)}")
+        return None
+
 @app.command("/generate")
 def handle_generate_command(ack, respond, command, client):
     """Handle the /generate slash command"""
@@ -431,7 +517,7 @@ def handle_generate_command(ack, respond, command, client):
     if not command_text:
         respond({
             "text": "Please specify a service and parameters:\n" +
-                   "1. Text generation: `/generate [ideogram|midjourney] [on|off|auto] your prompt`\n" +
+                   "1. Text generation: `/generate [ideogram|midjourney|openai] [on|off|auto] your prompt`\n" +
                    "2. Image remix: `/generate ideogram-remix [on|off|auto]` (attach an image) [optional prompt]",
             "response_type": "ephemeral"
         })
@@ -440,9 +526,9 @@ def handle_generate_command(ack, respond, command, client):
     parts = command_text.split()
     service = parts[0].lower()
     
-    if service not in ['ideogram', 'midjourney', 'ideogram-remix']:
+    if service not in ['ideogram', 'midjourney', 'openai', 'ideogram-remix']:
         respond({
-            "text": "Please specify a valid service: 'ideogram', 'midjourney', or 'ideogram-remix'",
+            "text": "Please specify a valid service: 'ideogram', 'midjourney', 'openai', or 'ideogram-remix'",
             "response_type": "ephemeral"
         })
         return
@@ -532,7 +618,7 @@ def handle_generate_command(ack, respond, command, client):
                     "response_type": "ephemeral"
                 })
         else:
-            # Handle other services (ideogram, midjourney)
+            # Handle other services (ideogram, midjourney, openai)
             if not prompt:
                 respond({
                     "text": f"Please provide a prompt for {service}.",
@@ -547,7 +633,12 @@ def handle_generate_command(ack, respond, command, client):
             })
             
             # Generate images based on selected service
-            result = generate_midjourney_image(prompt) if service == 'midjourney' else generate_ideogram_image(prompt, magic_prompt=magic_prompt)
+            if service == 'midjourney':
+                result = generate_midjourney_image(prompt)
+            elif service == 'openai':
+                result = generate_openai_image(prompt)
+            else:
+                result = generate_ideogram_image(prompt, magic_prompt=magic_prompt)
             
             if result:
                 # Create blocks for each image
