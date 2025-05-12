@@ -567,22 +567,24 @@ def post_openai_images_to_slack(client, command, prompt, result, respond):
                         logger.error(f"Error decoding base64 for image {i}: {str(decode_error)}")
                         continue
                 
-                # Upload the file to Slack
-                upload_result = client.files_upload(
-                    channels=command['channel_id'],
-                    file=temp_file_path,
-                    filename=f"openai-image-{i}.png",
-                    title=f"OpenAI Generated Image {i}",
-                    initial_comment=f"*✨ Enhanced Prompt for Image {i}:*\n```{enhanced_prompt}```"
-                )
+                # Upload the file using files_upload_v2 (the newer non-deprecated method)
+                with open(temp_file_path, 'rb') as file_content:
+                    upload_result = client.files_upload_v2(
+                        channel=command['channel_id'],
+                        file=file_content,
+                        filename=f"openai-image-{i}.png",
+                        title=f"OpenAI Generated Image {i}",
+                        initial_comment=f"*✨ Enhanced Prompt for Image {i}:*\n```{enhanced_prompt}```"
+                    )
                 
                 # Remove the temporary file after uploading
                 os.unlink(temp_file_path)
                 
-                logger.info(f"Successfully uploaded image {i} to Slack")
+                logger.info(f"Successfully uploaded image {i} to Slack using files_upload_v2")
                 
             except Exception as e:
                 logger.error(f"Error uploading image {i}: {str(e)}")
+                traceback.print_exc()  # Print full stack trace for better debugging
         
         # Update initial message
         respond({
@@ -591,7 +593,7 @@ def post_openai_images_to_slack(client, command, prompt, result, respond):
             "replace_original": True
         })
         
-        logger.info(f"Successfully sent {len(result)} OpenAI images to Slack")
+        logger.info(f"Successfully sent {len(result)} images to Slack")
         return True
     except Exception as e:
         logger.error(f"Error posting OpenAI images: {str(e)}")
