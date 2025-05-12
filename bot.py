@@ -80,7 +80,13 @@ if missing_vars:
 
 # Initialize Slack app
 try:
-    app = App(token=os.environ["SLACK_BOT_TOKEN"])
+    slack_bot_token = os.environ.get("SLACK_BOT_TOKEN")
+    if not slack_bot_token:
+        logger.error("SLACK_BOT_TOKEN environment variable is empty or not set")
+        raise ValueError("SLACK_BOT_TOKEN is not set properly")
+    
+    logger.info(f"Initializing Slack app with token: {slack_bot_token[:5]}...{slack_bot_token[-5:] if len(slack_bot_token) > 10 else ''}")
+    app = App(token=slack_bot_token)
     logger.info("Slack App initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize Slack App: {str(e)}")
