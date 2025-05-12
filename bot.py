@@ -546,37 +546,17 @@ def post_openai_images_to_slack(client, command, prompt, result, respond):
             unfurl_media=False
         )
         
-        # Send each image as a separate message
+        # Send each image using shares
         for i, (image_url, enhanced_prompt) in enumerate(result, 1):
-            image_blocks = [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*✨ Image {i} of {len(result)}*"
-                    }
-                },
-                {
-                    "type": "image",
-                    "title": {
-                        "type": "plain_text",
-                        "text": f"Generated Image {i}"
-                    },
-                    "image_url": image_url,
-                    "alt_text": f"AI generated image {i}"
-                }
-            ]
-            
-            # Send single image message
+            # For each image, just post a message that mentions the file
             client.chat_postMessage(
                 channel=command['channel_id'],
-                blocks=image_blocks,
-                text=f"OpenAI generated image {i}",
-                unfurl_links=False,
-                unfurl_media=False
+                text=f"*Image {i} of {len(result)}:* {image_url}",
+                unfurl_links=True,
+                unfurl_media=True
             )
-            
-        # Update the initial message
+        
+        # Update the initial "working on it" message
         respond({
             "text": f"✅ Successfully generated {len(result)} images with OpenAI",
             "response_type": "ephemeral",
