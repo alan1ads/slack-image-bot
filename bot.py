@@ -546,12 +546,49 @@ def post_openai_images_to_slack(client, command, prompt, result, respond):
             unfurl_media=False
         )
         
-        # Send each image using shares
+        # Send each image separately with proper attachment
         for i, (image_url, enhanced_prompt) in enumerate(result, 1):
-            # For each image, just post a message that mentions the file
+            # Make files public to avoid redirect issues
+            try:
+                # Extract file ID from URL
+                file_id = image_url.split('/')[-2]
+                client.files_sharedPublicURL(file=file_id)
+            except Exception as e:
+                logger.warning(f"Could not make file public: {str(e)}")
+            
+            # For each image, create a message with attachment and blocks
+            image_blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*✨ Image {i} of {len(result)}*"
+                    }
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"<{image_url}|View Image {i}>"
+                    },
+                    "accessory": {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "Download",
+                            "emoji": True
+                        },
+                        "url": image_url,
+                        "action_id": f"download_image_{i}"
+                    }
+                }
+            ]
+            
+            # Post with rich blocks
             client.chat_postMessage(
                 channel=command['channel_id'],
-                text=f"*Image {i} of {len(result)}:* {image_url}",
+                blocks=image_blocks,
+                text=f"OpenAI generated image {i}: {image_url}",
                 unfurl_links=True,
                 unfurl_media=True
             )
