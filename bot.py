@@ -417,7 +417,7 @@ def generate_ideogram_recreation(image_data, prompt=None, magic_prompt="ON"):
         logger.error(f"Error in generate_ideogram_recreation: {str(e)}")
         return None
 
-def generate_openai_image(prompt, num_images=5, size="1024x1024"):
+def generate_openai_image(prompt, num_images=5, size="auto"):
     """
     Generate images using OpenAI's GPT-Image-1 model
     """
@@ -435,11 +435,12 @@ def generate_openai_image(prompt, num_images=5, size="1024x1024"):
             api_key=api_key,
             http_client=httpx.Client(
                 proxies=None,
-                timeout=60.0
+                timeout=120.0  # Increase timeout to 2 minutes
             )
         )
         
         # Call the OpenAI API to generate images
+        logger.info(f"Sending request to OpenAI API with size={size}")
         response = client.images.generate(
             model="gpt-image-1",
             prompt=prompt,
